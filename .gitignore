@@ -1,0 +1,28 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+frontend/dist/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Textbook PDFs, OCR output, page images, and vector indexes are local data.
+# Keep only the source inventory in Git; do not publish textbook content.
+data/*
+!data/manifests/
+data/manifests/*
+!data/manifests/textbook_inventory.csv
+chroma_db/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/

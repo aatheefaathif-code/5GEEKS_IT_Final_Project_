@@ -1,0 +1,8 @@
+-r requirements.txt
+
+# Document extraction, OCR, multilingual embeddings, vector search, and generation
+chromadb>=1.0,<2.0
+httpx>=0.27,<1.0
+Pillow>=10.0,<13.0
+pytesseract>=0.3.13,<1.0
+transformers>=4.41,<4.45
