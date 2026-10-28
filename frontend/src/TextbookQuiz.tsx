@@ -6,6 +6,7 @@ import {
   type SourceReference,
   type Student,
 } from "./learningTypes";
+import { subjectsFor, textbookMediumForSubject } from "./subjectCatalog";
 
 type QuizQuestion = {
   question: string;
@@ -53,6 +54,7 @@ const copy = {
     title: "Learn with a textbook quiz",
     help: "Choose a topic from your selected textbook. Questions are created only when verified pages are found.",
     textbookLanguage: "Textbook language",
+    sourceLanguageNote: "English shows all available subjects. For subjects without an English book, the quiz uses the available textbook language. Tamil is preferred when both Tamil and Sinhala books exist.",
     subject: "Subject",
     topic: "Topic or lesson name",
     topicPlaceholder: "Choose a textbook lesson or type a topic",
@@ -88,6 +90,7 @@ const copy = {
     title: "පෙළපොත් ප්‍රශ්නාවලියකින් ඉගෙනගන්න",
     help: "තෝරාගත් පෙළපොතේ මාතෘකාවක් ලියන්න. තහවුරු කළ පිටු හමු වූ විට පමණක් ප්‍රශ්න සාදයි.",
     textbookLanguage: "පෙළපොත් භාෂාව",
+    sourceLanguageNote: "English තෝරාගත් විට ඇති සියලුම විෂයන් පෙන්වයි. English පොතක් නැති විෂයකට ඇති පෙළපොත් භාෂையை භාවිතා කරයි. දෙකම තිබේ නම් Tamil තෝරයි.",
     subject: "විෂය",
     topic: "මාතෘකාව හෝ පාඩමේ නම",
     topicPlaceholder: "තහවුරු කළ පාඩමක් තෝරන්න හෝ මාතෘකාවක් ලියන්න",
@@ -123,6 +126,7 @@ const copy = {
     title: "பாடநூல் வினாடி வினாவில் கற்போம்",
     help: "தேர்ந்தெடுத்த பாடநூலிலிருந்து ஒரு தலைப்பை எழுதுங்கள். சரிபார்க்கப்பட்ட பக்கங்கள் கிடைத்தால் மட்டுமே கேள்விகள் உருவாகும்.",
     textbookLanguage: "பாடநூல் மொழி",
+    sourceLanguageNote: "English தேர்ந்தெடுத்தால் கிடைக்கும் எல்லாப் பாடங்களும் காட்டப்படும். English புத்தகம் இல்லாத பாடத்திற்கு கிடைக்கும் பாடநூல் மொழி பயன்படுத்தப்படும். இரண்டும் இருந்தால் Tamil முன்னுரிமை.",
     subject: "பாடம்",
     topic: "தலைப்பு அல்லது பாடத்தின் பெயர்",
     topicPlaceholder: "சரிபார்க்கப்பட்ட பாடத்தைத் தேர்ந்தெடு அல்லது தலைப்பை எழுது",
@@ -255,9 +259,7 @@ export function TextbookQuiz({
   const [topic, setTopic] = useState("");
   const [selectedMedium, setSelectedMedium] = useState(medium);
   const [selectedSubject, setSelectedSubject] = useState(subject);
-  const [availableSubjects, setAvailableSubjects] = useState<string[]>(
-    subject ? [subject] : [],
-  );
+  const availableSubjects = subjectsFor(student?.grade ?? 1, selectedMedium);
   const [topicOptions, setTopicOptions] = useState<string[]>([]);
   const [loadingOptions, setLoadingOptions] = useState(false);
   const [optionsError, setOptionsError] = useState("");
@@ -279,7 +281,14 @@ export function TextbookQuiz({
       return;
     }
     const controller = new AbortController();
-    const params = new URLSearchParams({ medium: selectedMedium });
+    const sourceMedium = selectedSubject
+      ? textbookMediumForSubject(
+          student.grade,
+          selectedSubject,
+          selectedMedium,
+        )
+      : selectedMedium;
+    const params = new URLSearchParams({ medium: sourceMedium });
     if (selectedSubject) params.set("subject", selectedSubject);
     setLoadingOptions(true);
     setOptionsError("");
@@ -290,10 +299,9 @@ export function TextbookQuiz({
     )
       .then((payload) => {
         if (!isQuizOptions(payload)) throw new Error(labels.noEvidence);
-        setAvailableSubjects(payload.subjects);
-        if (!payload.subjects.includes(selectedSubject) && payload.subjects[0]) {
-          setSelectedSubject(payload.subjects[0]);
-          setTopic("");
+        if (selectedSubject && !payload.subjects.includes(selectedSubject)) {
+          setTopicOptions([]);
+          setOptionsError(labels.noEvidence);
           return;
         }
         setTopicOptions(payload.topics);
@@ -326,7 +334,11 @@ export function TextbookQuiz({
           body: JSON.stringify({
             subject: selectedSubject,
             topic: topic.trim(),
-            medium: selectedMedium,
+            medium: textbookMediumForSubject(
+              student.grade,
+              selectedSubject,
+              selectedMedium,
+            ),
             question_count: 5,
           }),
         },
@@ -412,9 +424,9 @@ export function TextbookQuiz({
                 id="quiz-medium"
                 value={selectedMedium}
                 onChange={(event) => {
-                  setSelectedMedium(event.target.value as Locale);
-                  setSelectedSubject("");
-                  setAvailableSubjects([]);
+                  const nextMedium = event.target.value as Locale;
+                  setSelectedMedium(nextMedium);
+                  setSelectedSubject(subjectsFor(student.grade, nextMedium)[0] ?? "");
                   setTopic("");
                   setTopicOptions([]);
                 }}
@@ -426,6 +438,9 @@ export function TextbookQuiz({
                   </option>
                 ))}
               </select>
+              {selectedMedium === "English" && (
+                <p className="subject-source-note">{labels.sourceLanguageNote}</p>
+              )}
               <label htmlFor="quiz-subject">{labels.subject}</label>
               <select
                 id="quiz-subject"

@@ -12,6 +12,7 @@ import { ColoringActivity } from "./ColoringActivity";
 import { TextbookQuiz } from "./TextbookQuiz";
 import { VoiceControls } from "./VoiceControls";
 import { getApiBaseUrl } from "./learningTypes";
+import { subjectsFor, textbookMediumForSubject } from "./subjectCatalog";
 import type { FamilyUser, Locale, Student } from "./learningTypes";
 
 type Page = "home" | "tutor" | "coloring" | "practice" | "progress" | "family";
@@ -91,104 +92,6 @@ function isLearningAnswer(
   );
 }
 
-const subjectsByGradeAndMedium: Record<string, Record<string, string[]>> = {
-  "1": {
-    English: ["English Language"],
-    Sinhala: [
-      "Buddhism",
-      "Catholicism",
-      "Christianity",
-      "Islam",
-      "Mathematics",
-      "Sinhala Language",
-    ],
-    Tamil: [
-      "Catholicism",
-      "Christianity",
-      "Islam",
-      "Mathematics",
-      "Tamil Language",
-    ],
-  },
-  "2": {
-    English: ["English Language"],
-    Sinhala: [
-      "Buddhism",
-      "Catholicism",
-      "Christianity",
-      "Islam",
-      "Mathematics",
-      "Sinhala Language",
-    ],
-    Tamil: [
-      "Catholicism",
-      "Christianity",
-      "Hinduism",
-      "Islam",
-      "Mathematics",
-      "Tamil Language",
-    ],
-  },
-  "3": {
-    English: ["English Language"],
-    Sinhala: [
-      "Buddhism",
-      "Catholicism",
-      "Christianity",
-      "Islam",
-      "Mathematics",
-      "Sinhala Language",
-    ],
-    Tamil: [
-      "Catholicism",
-      "Christianity",
-      "Hinduism",
-      "Islam",
-      "Mathematics",
-      "Tamil Language",
-    ],
-  },
-  "4": {
-    English: ["English Language"],
-    Sinhala: [
-      "Buddhism",
-      "Catholicism",
-      "Christianity",
-      "Islam",
-      "Mathematics",
-      "Sinhala Language",
-    ],
-    Tamil: [
-      "Catholicism",
-      "Christianity",
-      "Hinduism",
-      "Islam",
-      "Mathematics",
-      "Tamil Language",
-    ],
-  },
-  "5": {
-    English: ["English Language"],
-    Sinhala: [
-      "Buddhism",
-      "Catholicism",
-      "Christianity",
-      "Islam",
-      "Mathematics",
-      "Sinhala Language",
-    ],
-    Tamil: [
-      "Catholicism",
-      "Christianity",
-      "Hinduism",
-      "Islam",
-      "Mathematics",
-      "Scholarship Examination (multi-subject)",
-      "Tamil Language",
-    ],
-  },
-};
-
 const copy: Record<Locale, Record<string, string>> = {
   English: {
     brand: "SL Scholar AI",
@@ -210,6 +113,7 @@ const copy: Record<Locale, Record<string, string>> = {
     welcomeText: "What would you like to learn today?",
     grade: "My grade",
     textbookLanguage: "Textbook language",
+    sourceLanguageNote: "English shows all available subjects. For subjects without an English book, the tutor uses the available textbook language. Tamil is preferred when both Tamil and Sinhala books exist.",
     answerLanguage: "Answer language",
     subjects: "Explore your subjects",
     subjectHelp: "Choose a subject from the books in your selected language.",
@@ -277,6 +181,7 @@ const copy: Record<Locale, Record<string, string>> = {
     welcomeText: "අද ඔබ ඉගෙනගන්න කැමති කුමක්ද?",
     grade: "මගේ ශ්‍රේණිය",
     textbookLanguage: "පෙළපොතේ භාෂාව",
+    sourceLanguageNote: "English තෝරාගත් විට ඇති සියලුම විෂයන් පෙන්වයි. English පොතක් නැති විෂයකට ඇති පෙළපොත් භාෂையை භාවිතා කරයි. Tamil සහ Sinhala දෙකම තිබේ නම් Tamil තෝරයි.",
     answerLanguage: "පිළිතුරු භාෂාව",
     subjects: "විෂයයන් තෝරන්න",
     subjectHelp: "තෝරාගත් භාෂාවේ පොත්වල ඇති විෂයයක් තෝරන්න.",
@@ -344,6 +249,7 @@ const copy: Record<Locale, Record<string, string>> = {
     welcomeText: "இன்று என்ன கற்க விரும்புகிறாய்?",
     grade: "என் வகுப்பு",
     textbookLanguage: "பாடநூல் மொழி",
+    sourceLanguageNote: "English தேர்ந்தெடுத்தால் கிடைக்கும் எல்லாப் பாடங்களும் காட்டப்படும். English புத்தகம் இல்லாத பாடத்திற்கு கிடைக்கும் பாடநூல் மொழி பயன்படுத்தப்படும். Tamil, Sinhala இரண்டும் இருந்தால் Tamil முன்னுரிமை.",
     answerLanguage: "பதில் மொழி",
     subjects: "பாடங்களைத் தேர்ந்தெடு",
     subjectHelp: "தேர்ந்தெடுத்த மொழிப் புத்தகங்களில் உள்ள பாடத்தைத் தேர்ந்தெடு.",
@@ -531,8 +437,8 @@ const extendedCopy: Record<Locale, Record<string, string>> = {
   },
 };
 
-function subjectsFor(grade: number, medium: Locale): string[] {
-  return subjectsByGradeAndMedium[String(grade)]?.[medium] ?? [];
+function mediumName(medium: Locale): string {
+  return medium === "Sinhala" ? "සිංහල" : medium === "Tamil" ? "தமிழ்" : "English";
 }
 
 function App() {
@@ -564,6 +470,10 @@ function App() {
   const availableSubjects = useMemo(
     () => subjectsFor(grade, bookMedium),
     [grade, bookMedium],
+  );
+  const effectiveBookMedium = useMemo(
+    () => textbookMediumForSubject(grade, subject, bookMedium),
+    [grade, subject, bookMedium],
   );
 
   useEffect(() => {
@@ -622,7 +532,7 @@ function App() {
           question: trimmed,
           grade,
           subject,
-          medium: bookMedium,
+          medium: effectiveBookMedium,
           answer_language: locale,
           conversation_history: messages
             .filter((message) => !(message.role === "student" && message.text === trimmed))
@@ -665,7 +575,7 @@ function App() {
           question: trimmed,
           grade,
           subject,
-          medium: bookMedium,
+          medium: effectiveBookMedium,
           answerLanguage: locale,
         },
       ]);
@@ -947,6 +857,9 @@ function App() {
                 <option value="Tamil">தமிழ்</option>
               </select>
             </div>
+            {bookMedium === "English" && (
+              <p className="subject-source-note">{t.sourceLanguageNote}</p>
+            )}
 
             {availableSubjects.length ? (
               <div
@@ -965,7 +878,14 @@ function App() {
                     <span className={`subject-icon subject-icon--${index % 4}`} aria-hidden="true">
                       {["✎", "◉", "❋", "⌘"][index % 4]}
                     </span>
-                    <span className="subject-name">{item}</span>
+                    <span className="subject-card-copy">
+                      <span className="subject-name">{item}</span>
+                      {bookMedium === "English" && (
+                        <small className="subject-source-language">
+                          {mediumName(textbookMediumForSubject(grade, item, bookMedium))}
+                        </small>
+                      )}
+                    </span>
                     <span className="subject-arrow" aria-hidden="true">→</span>
                   </button>
                 ))}
@@ -1031,6 +951,9 @@ function App() {
                 </select>
               </label>
             </div>
+            {bookMedium === "English" && (
+              <p className="subject-source-note">{t.sourceLanguageNote}</p>
+            )}
 
             <div className="chat-panel">
               <div className="chat-toolbar">
@@ -1206,7 +1129,7 @@ function App() {
             <ColoringActivity
               locale={locale}
               grade={grade}
-              medium={bookMedium}
+              medium={effectiveBookMedium}
               subject={subject}
             />
           </section>
