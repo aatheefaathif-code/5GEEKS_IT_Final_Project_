@@ -1,838 +1,1254 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
-  type MouseEvent as ReactMouseEvent,
-  type PointerEvent,
+  type FormEvent,
+  type KeyboardEvent,
 } from "react";
-
+import { FamilyDashboard } from "./FamilyDashboard";
+import { ColoringActivity } from "./ColoringActivity";
+import { TextbookQuiz } from "./TextbookQuiz";
+import { VoiceControls } from "./VoiceControls";
 import { getApiBaseUrl } from "./learningTypes";
-import type { Locale } from "./learningTypes";
+import type { FamilyUser, Locale, Student } from "./learningTypes";
 
-type Activity = {
+type Page = "home" | "tutor" | "coloring" | "practice" | "progress" | "family";
+type ApiStatus = "checking" | "online" | "offline";
+type Source = {
   textbook_id: string;
-  textbook_title: string;
+  textbook_title: string | null;
   source_file: string;
-  grade: number;
-  subject: string;
-  medium: Locale;
-  reference_page: number;
-  exercise_page: number;
+  pdf_page_number: number;
+  chapter: string | null;
+  lesson: string | null;
+  source_official_status: string;
+  chunk_id: string;
+};
+type AnswerAction = "translate" | "explain" | "short";
+type AnswerTransformation = {
+  action: AnswerAction;
+  language: Locale;
+  text: string;
+};
+type ChatMessage = {
+  id: number;
+  role: "student" | "tutor";
+  text: string;
+  status?: "grounded" | "general" | "abstained";
+  sources?: Source[];
+  question?: string;
+  grade?: number;
+  subject?: string;
+  medium?: Locale;
+  answerLanguage?: Locale;
+  transformations?: AnswerTransformation[];
 };
 
-type Props = {
-  locale: Locale;
-  grade: number;
-  medium: Locale;
-  subject: string;
-};
-
-type UndoEntry = {
-  pixels: number[];
-  previousOverlay: Uint8ClampedArray;
-};
-
-type DrawPoint = { x: number; y: number };
-type DrawStroke = { color: string; points: DrawPoint[]; tool: "draw" | "erase" };
-type ColoringAction =
-  | { type: "fill"; entry: UndoEntry }
-  | { type: "stroke" };
-
-const palettes = [
-  "#ef4444",
-  "#f97316",
-  "#facc15",
-  "#22c55e",
-  "#06b6d4",
-  "#3b82f6",
-  "#8b5cf6",
-  "#ec4899",
-  "#8b5e3c",
-  "#202020",
-];
-
-const copy = {
-  English: {
-    title: "Colour and Say",
-    intro: "Choose a verified textbook picture, a blank page, or a lined page for writing and drawing.",
-    choose: "Choose a textbook picture",
-    selectPlaceholder: "Choose an activity page",
-    reference: "Textbook example",
-    exercise: "Your colouring page",
-    reveal: "Show the textbook colours",
-    hide: "Hide the example and try by yourself",
-    fillTool: "Fill",
-    drawTool: "Draw",
-    eraserTool: "Eraser",
-    textbookPage: "Textbook picture",
-    blankPage: "Blank page",
-    linedPage: "Lined page",
-    blankExercise: "Your blank drawing page",
-    linedExercise: "Your lined writing page",
-    fillHint: "Fill a closed shape, or choose Draw to colour freely with your finger or mouse.",
-    drawHint: "Draw directly on the picture with your finger or mouse. Choose a colour first.",
-    blankHint: "Draw anything you like on this blank page. Choose a colour, or use the eraser.",
-    linedHint: "Write or draw on the ruled lines. Choose a colour, or use the eraser.",
-    colour: "Choose a colour",
-    undo: "Undo last action",
-    reset: "Start again",
-    selected: "Selected colour",
-    page: "PDF page",
-    loading: "Looking for verified textbook colouring pages…",
-    none: "No verified Colour and Say pages are listed for this grade, subject and textbook language yet. Choose another book setting or ask your teacher.",
-    loadError: "The textbook picture could not be loaded. Please try again.",
-    hint: "Tap a white space inside one outlined object. The colour is kept inside its connected outline; a tap outside a shape will not fill the page.",
-    painted: "Nice colouring! Choose another colour or keep practising.",
-    notRegion: "Tap inside a large, white part of one outlined object.",
-    tooLarge: "That area is open or too large to colour safely. Try tapping inside one closed object.",
-    undoDone: "The last colour was removed. Choose a different colour and try again.",
-    resetDone: "Your colouring page is clear. Try again!",
-    source: "Source",
-    ariaCanvas: "Textbook outline page. Choose a colour, then click or tap inside an outlined shape.",
-    noSelection: "Choose one of the verified textbook activities above to begin.",
-  },
-  Sinhala: {
-    title: "වර්ණ ගන්වා කියන්න",
-    intro: "තහවුරු කළ පෙළපොත් රූපයක්, හිස් පිටුවක් හෝ ලිවීමට සහ ඇඳීමට ඉරි සහිත පිටුවක් තෝරන්න.",
-    choose: "පෙළපොත් රූපයක් තෝරන්න",
-    selectPlaceholder: "ක්‍රියාකාරකම් පිටුවක් තෝරන්න",
-    reference: "පෙළපොත් උදාහරණය",
-    exercise: "ඔබේ වර්ණ පිටුව",
-    reveal: "පෙළපොතේ වර්ණ පෙන්වන්න",
-    hide: "උදාහරණය සඟවා ඔබම උත්සාහ කරන්න",
-    fillTool: "වර්ණ පුරවන්න",
-    drawTool: "අඳින්න",
-    eraserTool: "මකනය",
-    textbookPage: "පෙළපොත් රූපය",
-    blankPage: "හිස් පිටුව",
-    linedPage: "ඉරි සහිත පිටුව",
-    blankExercise: "ඔබේ හිස් චිත්‍ර පිටුව",
-    linedExercise: "ඔබේ ඉරි සහිත ලිවීමේ පිටුව",
-    fillHint: "වසා ඇති රූපයකට වර්ණ පුරවන්න, නැතිනම් ඇඟිල්ලෙන් හෝ මූසිකයෙන් වර්ණ ගැන්වීමට අඳින්න තෝරන්න.",
-    drawHint: "ඇඟිල්ලෙන් හෝ මූසිකයෙන් රූපය මත කෙළින්ම අඳින්න. මුලින් වර්ණයක් තෝරන්න.",
-    blankHint: "මේ හිස් පිටුවේ ඔබ කැමති දෙයක් අඳින්න. වර්ණයක් තෝරන්න හෝ මකනය භාවිතා කරන්න.",
-    linedHint: "ඉරි මත ලියන්න හෝ අඳින්න. වර්ණයක් තෝරන්න හෝ මකනය භාවිතා කරන්න.",
-    colour: "වර්ණයක් තෝරන්න",
-    undo: "අවසාන ක්‍රියාව ඉවත් කරන්න",
-    reset: "නැවත අරඹන්න",
-    selected: "තෝරාගත් වර්ණය",
-    page: "PDF පිටුව",
-    loading: "තහවුරු කළ පෙළපොත් වර්ණ පිටු සොයමින්…",
-    none: "මෙම ශ්‍රේණිය, විෂය සහ පෙළපොත් භාෂාව සඳහා තහවුරු කළ “වර්ණ ගන්වා කියන්න” පිටු තවම නැහැ. වෙනත් සැකසුමක් තෝරන්න හෝ ගුරුවරයාගෙන් අසන්න.",
-    loadError: "පෙළපොත් රූපය පූරණය කළ නොහැකියි. නැවත උත්සාහ කරන්න.",
-    hint: "වසා ඇති රූපයක ඇතුළත සුදු කොටසක් තට්ටු කරන්න. වර්ණය එම රූපයේ රේඛාව තුළ පවතී; රූපයෙන් පිටත තට්ටු කළ විට පිටුවම වර්ණ ගැන්වෙන්නේ නැහැ.",
-    painted: "ලස්සනයි! තවත් වර්ණයක් තෝරාගෙන පුහුණු වන්න.",
-    notRegion: "වසා ඇති රූපයක විශාල සුදු කොටසක් ඇතුළත තට්ටු කරන්න.",
-    tooLarge: "මෙම කොටස විවෘත හෝ වර්ණ ගැන්වීමට විශාලයි. වසා ඇති රූපයක ඇතුළත තට්ටු කරන්න.",
-    undoDone: "අවසාන වර්ණය ඉවත් කළා. වෙනත් වර්ණයක් තෝරා නැවත උත්සාහ කරන්න.",
-    resetDone: "වර්ණ පිටුව පිරිසිදුයි. නැවත උත්සාහ කරන්න!",
-    source: "මූලාශ්‍රය",
-    ariaCanvas: "පෙළපොත් outline පිටුව. වර්ණයක් තෝරා රූපයක ඇතුළත තට්ටු කරන්න.",
-    noSelection: "ආරම්භ කිරීමට ඉහත තහවුරු කළ පෙළපොත් ක්‍රියාකාරකමක් තෝරන්න.",
-  },
-  Tamil: {
-    title: "வண்ணமிட்டு சொல்வோம்",
-    intro: "சரிபார்க்கப்பட்ட பாடநூல் படம், வெற்றுப் பக்கம் அல்லது எழுதவும் வரையவும் கோடுகள் உள்ள பக்கத்தைத் தேர்ந்தெடு.",
-    choose: "பாடநூல் படத்தைத் தேர்ந்தெடு",
-    selectPlaceholder: "செயல்பாட்டுப் பக்கத்தைத் தேர்ந்தெடு",
-    reference: "பாடநூல் மாதிரி",
-    exercise: "உன் வண்ணப் பக்கம்",
-    reveal: "பாடநூல் வண்ணங்களைக் காட்டு",
-    hide: "மாதிரியை மறைத்து நீயே முயற்சி செய்",
-    fillTool: "நிரப்பு",
-    drawTool: "கையால் வரை",
-    eraserTool: "அழிப்பான்",
-    textbookPage: "பாடநூல் படம்",
-    blankPage: "வெற்றுப் பக்கம்",
-    linedPage: "கோடுகள் உள்ள பக்கம்",
-    blankExercise: "உன் வெற்றுப் படம் வரையும் பக்கம்",
-    linedExercise: "உன் கோடுகள் உள்ள எழுதும் பக்கம்",
-    fillHint: "மூடிய படத்துக்குள் நிறத்தை நிரப்பு; அல்லது விரல்/சுட்டியால் சுதந்திரமாக வண்ணமிட “கையால் வரை” என்பதைத் தேர்ந்தெடு.",
-    drawHint: "விரல் அல்லது சுட்டியால் படத்தின் மேல் நேரடியாக வரை. முதலில் ஒரு நிறத்தைத் தேர்ந்தெடு.",
-    blankHint: "இந்த வெற்றுப் பக்கத்தில் உனக்குப் பிடித்ததை வரை. ஒரு நிறத்தைத் தேர்ந்தெடு அல்லது அழிப்பானைப் பயன்படுத்து.",
-    linedHint: "கோடுகள் மீது எழுது அல்லது வரை. ஒரு நிறத்தைத் தேர்ந்தெடு அல்லது அழிப்பானைப் பயன்படுத்து.",
-    colour: "ஒரு நிறத்தைத் தேர்ந்தெடு",
-    undo: "கடைசி செயலை நீக்கு",
-    reset: "மீண்டும் தொடங்கு",
-    selected: "தேர்ந்தெடுத்த நிறம்",
-    page: "PDF பக்கம்",
-    loading: "சரிபார்க்கப்பட்ட பாடநூல் வண்ணப் பக்கங்களைத் தேடுகிறது…",
-    none: "இந்த வகுப்பு, பாடம், பாடநூல் மொழிக்கு சரிபார்க்கப்பட்ட “வண்ணமிட்டு சொல்வோம்” பக்கங்கள் இன்னும் இல்லை. வேறு அமைப்பைத் தேர்ந்தெடு அல்லது ஆசிரியரிடம் கேள்.",
-    loadError: "பாடநூல் படத்தை ஏற்ற முடியவில்லை. மீண்டும் முயற்சி செய்.",
-    hint: "மூடிய படத்தின் உள்ளே உள்ள வெள்ளைப் பகுதியில் தொடு. நிறம் அந்தப் படத்தின் கோட்டுக்குள் இருக்கும்; படத்திற்கு வெளியே தொட்டால் பக்கம் முழுவதும் நிறமிடாது.",
-    painted: "அருமையான வண்ணம்! இன்னொரு நிறத்தைத் தேர்ந்தெடுத்து தொடர்ந்து முயற்சி செய்.",
-    notRegion: "மூடிய படத்தின் உள்ளே உள்ள பெரிய வெள்ளைப் பகுதியில் தொடு.",
-    tooLarge: "இந்தப் பகுதி திறந்திருக்கிறது அல்லது பாதுகாப்பாக வண்ணமிடப் பெரிதாக உள்ளது. ஒரு மூடிய படத்தின் உள்ளே தொடு.",
-    undoDone: "கடைசி நிறம் நீக்கப்பட்டது. வேறு நிறத்தைத் தேர்ந்தெடுத்து மீண்டும் முயற்சி செய்.",
-    resetDone: "வண்ணப் பக்கம் சுத்தம் செய்யப்பட்டது. மீண்டும் முயற்சி செய்!",
-    source: "மூலம்",
-    ariaCanvas: "பாடநூல் கோட்டுப்படம். நிறத்தைத் தேர்ந்தெடுத்து படத்தின் உள்ளே தொடு.",
-    noSelection: "தொடங்க மேலே உள்ள சரிபார்க்கப்பட்ட பாடநூல் செயல்பாட்டைத் தேர்ந்தெடு.",
-  },
-} satisfies Record<Locale, Record<string, string>>;
-
-function isActivity(value: unknown): value is Activity {
+function isSource(value: unknown): value is Source {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
   return (
-    typeof value === "object" &&
-    value !== null &&
     "textbook_id" in value &&
     typeof value.textbook_id === "string" &&
     "textbook_title" in value &&
-    typeof value.textbook_title === "string" &&
+    (typeof value.textbook_title === "string" || value.textbook_title === null) &&
     "source_file" in value &&
     typeof value.source_file === "string" &&
-    "grade" in value &&
-    typeof value.grade === "number" &&
-    "subject" in value &&
-    typeof value.subject === "string" &&
-    "medium" in value &&
-    (value.medium === "English" || value.medium === "Sinhala" || value.medium === "Tamil") &&
-    "reference_page" in value &&
-    typeof value.reference_page === "number" &&
-    "exercise_page" in value &&
-    typeof value.exercise_page === "number"
+    "pdf_page_number" in value &&
+    typeof value.pdf_page_number === "number" &&
+    "chapter" in value &&
+    (typeof value.chapter === "string" || value.chapter === null) &&
+    "lesson" in value &&
+    (typeof value.lesson === "string" || value.lesson === null) &&
+    "source_official_status" in value &&
+    typeof value.source_official_status === "string" &&
+    "chunk_id" in value &&
+    typeof value.chunk_id === "string"
   );
 }
 
-function canFill(data: Uint8ClampedArray, index: number) {
+function isLearningAnswer(
+  value: unknown,
+): value is {
+  answer: string;
+  status: "grounded" | "general" | "abstained";
+  sources: Source[];
+} {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
   return (
-    data[index] > 220 &&
-    data[index + 1] > 220 &&
-    data[index + 2] > 220
+    "answer" in value &&
+    typeof value.answer === "string" &&
+    "status" in value &&
+    (value.status === "grounded" || value.status === "general" || value.status === "abstained") &&
+    "sources" in value &&
+    Array.isArray(value.sources) &&
+    value.sources.every(isSource)
   );
 }
 
-export function ColoringActivity({ locale, grade, medium, subject }: Props) {
-  const labels = copy[locale];
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const drawCanvasRef = useRef<HTMLCanvasElement>(null);
-  const basePixelsRef = useRef<ImageData | null>(null);
-  const overlayRef = useRef<ImageData | null>(null);
-  const undoRef = useRef<ColoringAction[]>([]);
-  const strokesRef = useRef<DrawStroke[]>([]);
-  const activeStrokeRef = useRef<DrawStroke | null>(null);
-  const [activities, setActivities] = useState<Activity[]>([]);
-  const [selectedId, setSelectedId] = useState("");
-  const [color, setColor] = useState(palettes[0]);
-  const [drawMode, setDrawMode] = useState(false);
-  const [eraserMode, setEraserMode] = useState(false);
-  const [blankPage, setBlankPage] = useState(false);
-  const [showReference, setShowReference] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [feedback, setFeedback] = useState("");
-  const [linedPage, setLinedPage] = useState(false);
+const subjectsByGradeAndMedium: Record<string, Record<string, string[]>> = {
+  "1": {
+    English: ["English Language"],
+    Sinhala: [
+      "Buddhism",
+      "Catholicism",
+      "Christianity",
+      "Islam",
+      "Mathematics",
+      "Sinhala Language",
+    ],
+    Tamil: [
+      "Catholicism",
+      "Christianity",
+      "Islam",
+      "Mathematics",
+      "Tamil Language",
+    ],
+  },
+  "2": {
+    English: ["English Language"],
+    Sinhala: [
+      "Buddhism",
+      "Catholicism",
+      "Christianity",
+      "Islam",
+      "Mathematics",
+      "Sinhala Language",
+    ],
+    Tamil: [
+      "Catholicism",
+      "Christianity",
+      "Hinduism",
+      "Islam",
+      "Mathematics",
+      "Tamil Language",
+    ],
+  },
+  "3": {
+    English: ["English Language"],
+    Sinhala: [
+      "Buddhism",
+      "Catholicism",
+      "Christianity",
+      "Islam",
+      "Mathematics",
+      "Sinhala Language",
+    ],
+    Tamil: [
+      "Catholicism",
+      "Christianity",
+      "Hinduism",
+      "Islam",
+      "Mathematics",
+      "Tamil Language",
+    ],
+  },
+  "4": {
+    English: ["English Language"],
+    Sinhala: [
+      "Buddhism",
+      "Catholicism",
+      "Christianity",
+      "Islam",
+      "Mathematics",
+      "Sinhala Language",
+    ],
+    Tamil: [
+      "Catholicism",
+      "Christianity",
+      "Hinduism",
+      "Islam",
+      "Mathematics",
+      "Tamil Language",
+    ],
+  },
+  "5": {
+    English: ["English Language"],
+    Sinhala: [
+      "Buddhism",
+      "Catholicism",
+      "Christianity",
+      "Islam",
+      "Mathematics",
+      "Sinhala Language",
+    ],
+    Tamil: [
+      "Catholicism",
+      "Christianity",
+      "Hinduism",
+      "Islam",
+      "Mathematics",
+      "Scholarship Examination (multi-subject)",
+      "Tamil Language",
+    ],
+  },
+};
 
-  const selected = activities.find(
-    (activity) => `${activity.textbook_id}:${activity.exercise_page}` === selectedId,
+const copy: Record<Locale, Record<string, string>> = {
+  English: {
+    brand: "SL Scholar AI",
+    tagline: "Curious minds grow here",
+    switchToDarkMode: "Switch to dark mode",
+    switchToLightMode: "Switch to light mode",
+    home: "Home",
+    tutor: "Ask my tutor",
+    coloringNav: "Colour",
+    practice: "Activities",
+    progress: "My progress",
+    gradeOption: "Grade",
+    regionGrade: "GRADE 1–5 · SRI LANKA",
+    exploreEyebrow: "LET’S LEARN",
+    tutorEyebrow: "YOUR TEXTBOOK HELPER",
+    composerHint: "Enter to send · Shift+Enter for a new line",
+    sidebarFooter: "Made for curious learners · Grades 1–5",
+    welcome: "Hello, learner!",
+    welcomeText: "What would you like to learn today?",
+    grade: "My grade",
+    textbookLanguage: "Textbook language",
+    answerLanguage: "Answer language",
+    subjects: "Explore your subjects",
+    subjectHelp: "Choose a subject from the books in your selected language.",
+    ask: "Ask the AI tutor",
+    question: "Type your question here...",
+    send: "Send question",
+    tutorWelcome: "Hi! I can help you learn from your textbook.",
+    tutorHelp: "Choose your grade, book language and subject, then ask a question.",
+    source: "Textbook source",
+    page: "PDF page",
+    chapter: "Chapter",
+    lesson: "Lesson",
+    verified: "Answer based on textbook evidence",
+    generalAnswer: "General answer — not found in the selected textbook",
+    abstained: "I could not find enough textbook evidence for this answer.",
+    retry: "Try again",
+    clear: "New chat",
+    clearConfirm: "Clear this conversation?",
+    loading: "Looking in your textbook...",
+    apiOnline: "Tutor service is connected",
+    apiChecking: "Connecting to the tutor...",
+    apiOffline: "Tutor service is offline. Start the backend to ask questions.",
+    activitiesTitle: "Learning activities",
+    progressTitle: "Your learning progress",
+    progressPending: "Progress will appear here when secure student accounts and activity tracking are added.",
+    emptyTitle: "Your learning journey starts here",
+    emptyText: "Your chats are not saved yet. Ask a question to get started.",
+    noSubjects: "No subjects are listed for this grade and book language.",
+    sourceNote: "Page numbers refer to PDF pages. Book details appear only when available.",
+    answerActions: "Answer options",
+    translateTo: "Translate to",
+    moreExplanation: "More explanation",
+    shortAnswer: "Short answer",
+    transformationFailed: "Sorry, that answer could not be updated. Please try again.",
+    translating: "Translating...",
+    explaining: "Explaining...",
+    shortening: "Making it shorter...",
+    translatedAnswer: "Translated to",
+    errorPrefix: "I could not get an answer.",
+    tryAgain: "Please try again in a moment.",
+    tutorBusy: "The tutor is temporarily busy. Please try again shortly.",
+    parentTeacher: "Open the secure parent and teacher dashboard.",
+    regionNav: "Main navigation",
+    regionChat: "Tutor conversation",
+    status: "Service status",
+    selected: "Selected",
+  },
+  Sinhala: {
+    brand: "SL Scholar AI",
+    tagline: "කුතුහලයෙන් දැනුමට",
+    switchToDarkMode: "අඳුරු තේමාවට මාරු වන්න",
+    switchToLightMode: "ආලෝක තේමාවට මාරු වන්න",
+    home: "මුල් පිටුව",
+    tutor: "ගුරු මිතුරාගෙන් අසන්න",
+    coloringNav: "වර්ණ",
+    practice: "ක්‍රියාකාරකම්",
+    progress: "මගේ ප්‍රගතිය",
+    gradeOption: "ශ්‍රේණිය",
+    regionGrade: "ශ්‍රේණි 1–5 · ශ්‍රී ලංකාව",
+    exploreEyebrow: "අපි ඉගෙනගනිමු",
+    tutorEyebrow: "ඔබේ පෙළපොත් ගුරු මිතුරා",
+    composerHint: "යැවීමට Enter · නව පේළියකට Shift+Enter",
+    sidebarFooter: "කුතුහලයෙන් ඉගෙනගන්න · ශ්‍රේණි 1–5",
+    welcome: "ආයුබෝවන්, පුංචි ඉගෙනුම් මිතුරා!",
+    welcomeText: "අද ඔබ ඉගෙනගන්න කැමති කුමක්ද?",
+    grade: "මගේ ශ්‍රේණිය",
+    textbookLanguage: "පෙළපොතේ භාෂාව",
+    answerLanguage: "පිළිතුරු භාෂාව",
+    subjects: "විෂයයන් තෝරන්න",
+    subjectHelp: "තෝරාගත් භාෂාවේ පොත්වල ඇති විෂයයක් තෝරන්න.",
+    ask: "AI ගුරු මිතුරාගෙන් අසන්න",
+    question: "ඔබේ ප්‍රශ්නය මෙහි ලියන්න...",
+    send: "ප්‍රශ්නය යවන්න",
+    tutorWelcome: "ආයුබෝවන්! ඔබේ පෙළපොතෙන් ඉගෙනගන්න මම උදව් කරන්නම්.",
+    tutorHelp: "ශ්‍රේණිය, පෙළපොතේ භාෂාව සහ විෂය තෝරා ප්‍රශ්නයක් අසන්න.",
+    source: "පෙළපොත් මූලාශ්‍රය",
+    page: "PDF පිටුව",
+    chapter: "පරිච්ඡේදය",
+    lesson: "පාඩම",
+    verified: "පෙළපොත් සාක්ෂි මත පදනම් වූ පිළිතුර",
+    generalAnswer: "සාමාන්‍ය පිළිතුරක් — තෝරාගත් පෙළපොතේ හමු නොවීය",
+    abstained: "මෙයට පිළිතුරු දීමට ප්‍රමාණවත් පෙළපොත් සාක්ෂි හමු වුණේ නැහැ.",
+    retry: "නැවත උත්සාහ කරන්න",
+    clear: "අලුත් සංවාදය",
+    clearConfirm: "මෙම සංවාදය මකන්නද?",
+    loading: "පෙළපොතේ සොයමින්...",
+    apiOnline: "ගුරු සේවාව සම්බන්ධ වී ඇත",
+    apiChecking: "ගුරු සේවාවට සම්බන්ධ වෙමින්...",
+    apiOffline: "ගුරු සේවාව සම්බන්ධ නැහැ. ප්‍රශ්න ඇසීමට backend ආරම්භ කරන්න.",
+    activitiesTitle: "ඉගෙනුම් ක්‍රියාකාරකම්",
+    progressTitle: "ඔබේ ඉගෙනුම් ප්‍රගතිය",
+    progressPending: "ආරක්ෂිත ශිෂ්‍ය ගිණුම් සහ ක්‍රියාකාරකම් සටහන් එකතු කළ විට ප්‍රගතිය මෙහි පෙන්වයි.",
+    emptyTitle: "ඔබේ ඉගෙනුම් ගමන මෙතැනින් ඇරඹේ",
+    emptyText: "ඔබේ සංවාද තවම සුරැකෙන්නේ නැහැ. ආරම්භ කිරීමට ප්‍රශ්නයක් අසන්න.",
+    noSubjects: "මෙම ශ්‍රේණියට සහ පෙළපොත් භාෂාවට විෂය ලැයිස්තුවක් නැහැ.",
+    sourceNote: "පිටු අංක PDF පිටු සඳහාය. ලබාගත හැකි පොත් විස්තර පමණක් පෙන්වයි.",
+    answerActions: "පිළිතුරු විකල්ප",
+    translateTo: "පරිවර්තනය කරන්න",
+    moreExplanation: "තවත් පැහැදිලි කරන්න",
+    shortAnswer: "කෙටි පිළිතුර",
+    transformationFailed: "කණගාටුයි, පිළිතුර වෙනස් කළ නොහැකියි. නැවත උත්සාහ කරන්න.",
+    translating: "පරිවර්තනය කරමින්...",
+    explaining: "පැහැදිලි කරමින්...",
+    shortening: "කෙටි කරමින්...",
+    translatedAnswer: "පරිවර්තනය කළ භාෂාව",
+    errorPrefix: "පිළිතුර ලබාගත නොහැකි විය.",
+    tryAgain: "කරුණාකර මොහොතකින් නැවත උත්සාහ කරන්න.",
+    tutorBusy: "ගුරු සේවාව තාවකාලිකව කාර්යබහුලයි. ටික වේලාවකින් නැවත උත්සාහ කරන්න.",
+    parentTeacher: "දෙමාපිය සහ ගුරු පුවරුව විවෘත කරන්න.",
+    regionNav: "ප්‍රධාන මෙනුව",
+    regionChat: "ගුරු මිතුරා සමඟ සංවාදය",
+    status: "සේවා තත්ත්වය",
+    selected: "තෝරා ඇත",
+  },
+  Tamil: {
+    brand: "SL Scholar AI",
+    tagline: "ஆர்வத்துடன் கற்போம்",
+    switchToDarkMode: "இருண்ட பயன்முறைக்கு மாறு",
+    switchToLightMode: "ஒளி பயன்முறைக்கு மாறு",
+    home: "முகப்பு",
+    tutor: "ஆசிரியரிடம் கேள்",
+    coloringNav: "வண்ணம்",
+    practice: "செயல்பாடுகள்",
+    progress: "என் முன்னேற்றம்",
+    gradeOption: "வகுப்பு",
+    regionGrade: "வகுப்பு 1–5 · இலங்கை",
+    exploreEyebrow: "கற்போம்",
+    tutorEyebrow: "உன் பாடநூல் உதவியாளர்",
+    composerHint: "அனுப்ப Enter · புதிய வரிக்கு Shift+Enter",
+    sidebarFooter: "ஆர்வத்துடன் கற்போம் · வகுப்புகள் 1–5",
+    welcome: "வணக்கம், மாணவரே!",
+    welcomeText: "இன்று என்ன கற்க விரும்புகிறாய்?",
+    grade: "என் வகுப்பு",
+    textbookLanguage: "பாடநூல் மொழி",
+    answerLanguage: "பதில் மொழி",
+    subjects: "பாடங்களைத் தேர்ந்தெடு",
+    subjectHelp: "தேர்ந்தெடுத்த மொழிப் புத்தகங்களில் உள்ள பாடத்தைத் தேர்ந்தெடு.",
+    ask: "AI ஆசிரியரிடம் கேள்",
+    question: "உன் கேள்வியை இங்கே எழுது...",
+    send: "கேள்வியை அனுப்பு",
+    tutorWelcome: "வணக்கம்! உன் பாடநூலிலிருந்து கற்க உதவுகிறேன்.",
+    tutorHelp: "வகுப்பு, பாடநூல் மொழி, பாடத்தைத் தேர்ந்தெடுத்து கேள்வி கேள்.",
+    source: "பாடநூல் மூலம்",
+    page: "PDF பக்கம்",
+    chapter: "அத்தியாயம்",
+    lesson: "பாடம்",
+    verified: "பாடநூல் ஆதாரத்தின் அடிப்படையிலான பதில்",
+    generalAnswer: "பொதுவான பதில் — தேர்ந்தெடுத்த பாடநூலில் இல்லை",
+    abstained: "இதற்குப் பதிலளிக்கப் போதுமான பாடநூல் ஆதாரம் கிடைக்கவில்லை.",
+    retry: "மீண்டும் முயற்சி",
+    clear: "புதிய உரையாடல்",
+    clearConfirm: "இந்த உரையாடலை அழிக்கவா?",
+    loading: "பாடநூலில் தேடுகிறது...",
+    apiOnline: "ஆசிரியர் சேவை இணைக்கப்பட்டுள்ளது",
+    apiChecking: "ஆசிரியர் சேவையுடன் இணைகிறது...",
+    apiOffline: "ஆசிரியர் சேவை இணைக்கப்படவில்லை. கேள்வி கேட்க backend-ஐ தொடங்கவும்.",
+    activitiesTitle: "கற்றல் செயல்பாடுகள்",
+    progressTitle: "உன் கற்றல் முன்னேற்றம்",
+    progressPending: "பாதுகாப்பான மாணவர் கணக்குகளும் செயல்பாட்டு பதிவுகளும் சேர்க்கப்பட்டால் முன்னேற்றம் இங்கே தோன்றும்.",
+    emptyTitle: "உன் கற்றல் பயணம் இங்கே தொடங்குகிறது",
+    emptyText: "உரையாடல்கள் இன்னும் சேமிக்கப்படுவதில்லை. தொடங்க ஒரு கேள்வி கேள்.",
+    noSubjects: "இந்த வகுப்பு மற்றும் பாடநூல் மொழிக்கு பாடங்கள் பட்டியலிடப்படவில்லை.",
+    sourceNote: "பக்க எண்கள் PDF பக்கங்களைக் குறிக்கும். கிடைக்கும் புத்தக விவரங்கள் மட்டுமே காட்டப்படும்.",
+    answerActions: "பதில் விருப்பங்கள்",
+    translateTo: "மொழிபெயர்",
+    moreExplanation: "இன்னும் விளக்கு",
+    shortAnswer: "சுருக்கமான பதில்",
+    transformationFailed: "மன்னிக்கவும், பதிலை மாற்ற முடியவில்லை. மீண்டும் முயற்சி செய்.",
+    translating: "மொழிபெயர்க்கிறது...",
+    explaining: "விளக்குகிறது...",
+    shortening: "சுருக்குகிறது...",
+    translatedAnswer: "மொழிபெயர்ப்பு",
+    errorPrefix: "பதிலைப் பெற முடியவில்லை.",
+    tryAgain: "சிறிது நேரம் கழித்து மீண்டும் முயற்சி செய்.",
+    tutorBusy: "ஆசிரியர் சேவை தற்காலிகமாகப் பிஸியாக உள்ளது. சிறிது நேரம் கழித்து மீண்டும் முயற்சி செய்.",
+    parentTeacher: "பெற்றோர் மற்றும் ஆசிரியர் பலகையைத் திற.",
+    regionNav: "முதன்மை வழிசெலுத்தல்",
+    regionChat: "ஆசிரியருடனான உரையாடல்",
+    status: "சேவை நிலை",
+    selected: "தேர்ந்தெடுக்கப்பட்டது",
+  },
+};
+
+const extendedCopy: Record<Locale, Record<string, string>> = {
+  English: {
+    family: "Family space",
+    preview: "UI PREVIEW",
+    practiceIntro: "A short, just-for-fun maths warm-up for your selected grade.",
+    practiceKind: "QUICK MATHS",
+    startPractice: "Start practice",
+    solvePrompt: "Solve this:",
+    chooseAnswer: "Choose your answer",
+    correctAnswer: "That's right! Great thinking.",
+    incorrectAnswer: "Good try! Let's look at the answer together.",
+    nextQuestion: "Next question",
+    finishPractice: "See my result",
+    playAgain: "Play again",
+    score: "Your score",
+    question: "Question",
+    of: "of",
+    correctCount: "correct",
+    practiceNote: "This is a simple practice preview, not a verified textbook activity. Your answers are kept only on this page and are not saved.",
+    progressIntro: "A little progress is still progress. Here's what happened in this visit.",
+    sessionOnly: "This is only for the current visit",
+    questionsAnswered: "Questions answered",
+    rightAnswers: "Right answers",
+    learningActivity: "Practice activity",
+    noActivity: "Complete a practice round to see your visit summary here.",
+    badgesTitle: "Learning badges",
+    badgesPending: "Badges will appear after secure accounts and progress tracking are connected.",
+    familyTitle: "A learning space for families",
+    familyIntro: "A clear view of a learner's journey, designed for parents and teachers.",
+    parentRole: "Parent view",
+    teacherRole: "Teacher view",
+    parentRoleDescription: "Parents should only see learners securely linked to their own family account.",
+    teacherRoleDescription: "Teachers should only see learners authorised for their classes or school role.",
+    secureGateTitle: "Student information is protected",
+    secureGateText: "A real dashboard must verify your sign-in and your relationship to each student before showing any personal learning records.",
+    secureGateNote: "Secure sign-in and authorised student records are not connected yet. No student data is shown in this preview.",
+    dashboardFeatureOne: "Learning overview",
+    dashboardFeatureOneText: "Review verified activity and learning progress once a student account is connected.",
+    dashboardFeatureTwo: "Subjects and practice",
+    dashboardFeatureTwoText: "See the subjects and practice activities assigned to an authorised learner.",
+    dashboardFeatureThree: "Support their learning",
+    dashboardFeatureThreeText: "Notice what a learner has practised and where a kind explanation may help.",
+    dashboardFeatureFour: "Privacy first",
+    dashboardFeatureFourText: "Only linked parents or authorised teachers should be able to access a learner's records.",
+    dashboardNoRecords: "No learner records are loaded. Sign-in and student linking are required before this dashboard can show data.",
+  },
+  Sinhala: {
+    family: "පවුලේ ඉගෙනුම් පිටුව",
+    preview: "පෙරදසුන",
+    practiceIntro: "තෝරාගත් ශ්‍රේණිය සඳහා කෙටි ගණිත පුහුණුවක්.",
+    practiceKind: "කෙටි ගණිත පුහුණුව",
+    startPractice: "පුහුණුව අරඹන්න",
+    solvePrompt: "ගණනය කරන්න:",
+    chooseAnswer: "පිළිතුර තෝරන්න",
+    correctAnswer: "හරි! හොඳින් සිතුවා.",
+    incorrectAnswer: "හොඳ උත්සාහයක්! පිළිතුර එකට බලමු.",
+    nextQuestion: "ඊළඟ ප්‍රශ්නය",
+    finishPractice: "ප්‍රතිඵලය බලන්න",
+    playAgain: "නැවත කරන්න",
+    score: "ඔබේ ලකුණු",
+    question: "ප්‍රශ්නය",
+    of: "න්",
+    correctCount: "නිවැරදියි",
+    practiceNote: "මෙය සරල පුහුණු පෙරදසුනක් පමණි; තහවුරු කළ පෙළපොත් ක්‍රියාකාරකමක් නොවේ. පිළිතුරු මෙම පිටුවේ පමණක් තාවකාලිකව පවතින අතර සුරැකෙන්නේ නැත.",
+    progressIntro: "කුඩා ප්‍රගතියත් වටිනවා. මේ පිවිසුමේ සිදු වූ දේ මෙන්න.",
+    sessionOnly: "මෙය මෙම පිවිසුමට පමණි",
+    questionsAnswered: "පිළිතුරු දුන් ප්‍රශ්න",
+    rightAnswers: "නිවැරදි පිළිතුරු",
+    learningActivity: "පුහුණු ක්‍රියාකාරකම",
+    noActivity: "මෙහි පිවිසුම් සාරාංශය බැලීමට පුහුණු වටයක් සම්පූර්ණ කරන්න.",
+    badgesTitle: "ඉගෙනුම් ලාංඡන",
+    badgesPending: "ආරක්ෂිත ගිණුම් සහ ප්‍රගති සටහන් සම්බන්ධ කළ පසු ලාංඡන පෙන්වනු ඇත.",
+    familyTitle: "පවුල් සඳහා ඉගෙනුම් අවකාශය",
+    familyIntro: "දෙමාපියන්ට සහ ගුරුවරුන්ට ඉගෙනුම් ගමන පැහැදිලිව බැලීමට සැලසුම් කර ඇත.",
+    parentRole: "දෙමාපිය දසුන",
+    teacherRole: "ගුරු දසුන",
+    parentRoleDescription: "දෙමාපියන්ට තම පවුල් ගිණුමට ආරක්ෂිතව සම්බන්ධ කළ ශිෂ්‍යයන් පමණක් පෙන්විය යුතුය.",
+    teacherRoleDescription: "ගුරුවරුන්ට තම පන්තියට හෝ පාසල් භූමිකාවට අවසර ඇති ශිෂ්‍යයන් පමණක් පෙන්විය යුතුය.",
+    secureGateTitle: "ශිෂ්‍ය තොරතුරු ආරක්ෂිතයි",
+    secureGateText: "පුද්ගලික ඉගෙනුම් වාර්තා පෙන්වීමට පෙර, සැබෑ පුවරුවක් ඔබේ පිවිසුමත් ශිෂ්‍යයා සමඟ ඇති සම්බන්ධතාවත් තහවුරු කළ යුතුය.",
+    secureGateNote: "ආරක්ෂිත පිවිසුම සහ අවසර ලත් ශිෂ්‍ය වාර්තා තවම සම්බන්ධ කර නැහැ. මෙම පෙරදසුනේ ශිෂ්‍ය දත්ත පෙන්වන්නේ නැහැ.",
+    dashboardFeatureOne: "ඉගෙනුම් සාරාංශය",
+    dashboardFeatureOneText: "ශිෂ්‍ය ගිණුමක් සම්බන්ධ කළ පසු තහවුරු කළ ක්‍රියාකාරකම් සහ ප්‍රගතිය බලන්න.",
+    dashboardFeatureTwo: "විෂයයන් සහ පුහුණුව",
+    dashboardFeatureTwoText: "අවසර ලත් ශිෂ්‍යයෙකුට නියම කළ විෂයයන් සහ පුහුණු ක්‍රියාකාරකම් බලන්න.",
+    dashboardFeatureThree: "ඉගෙනීමට සහාය වන්න",
+    dashboardFeatureThreeText: "ශිෂ්‍යයා පුහුණු වූ දේ සහ තවත් සරල පැහැදිලි කිරීමක් අවශ්‍ය තැන් හඳුනාගන්න.",
+    dashboardFeatureFour: "පෞද්ගලිකත්වය ප්‍රමුඛයි",
+    dashboardFeatureFourText: "සම්බන්ධිත දෙමාපියන්ට හෝ අවසර ලත් ගුරුවරුන්ට පමණක් ශිෂ්‍ය වාර්තා බැලිය හැකිය.",
+    dashboardNoRecords: "ශිෂ්‍ය වාර්තා පූරණය කර නැහැ. දත්ත පෙන්වීමට පිවිසුම සහ ශිෂ්‍ය සම්බන්ධ කිරීම අවශ්‍යයි.",
+  },
+  Tamil: {
+    family: "குடும்பப் பகுதி",
+    preview: "முன்னோட்டம்",
+    practiceIntro: "தேர்ந்தெடுத்த வகுப்புக்கான சிறிய கணிதப் பயிற்சி.",
+    practiceKind: "சிறிய கணிதப் பயிற்சி",
+    startPractice: "பயிற்சியைத் தொடங்கு",
+    solvePrompt: "கணக்கிடு:",
+    chooseAnswer: "உன் பதிலைத் தேர்ந்தெடு",
+    correctAnswer: "சரியான பதில்! நன்றாகச் சிந்தித்தாய்.",
+    incorrectAnswer: "நல்ல முயற்சி! சரியான பதிலை ஒன்றாகப் பார்ப்போம்.",
+    nextQuestion: "அடுத்த கேள்வி",
+    finishPractice: "முடிவைப் பார்",
+    playAgain: "மீண்டும் விளையாடு",
+    score: "உன் மதிப்பெண்",
+    question: "கேள்வி",
+    of: "இல்",
+    correctCount: "சரி",
+    practiceNote: "இது ஒரு எளிய பயிற்சி முன்னோட்டம்; சரிபார்க்கப்பட்ட பாடநூல் செயல்பாடு அல்ல. உன் பதில்கள் இந்தப் பக்கத்தில் மட்டும் தற்காலிகமாக இருக்கும்; சேமிக்கப்படாது.",
+    progressIntro: "சிறிய முன்னேற்றமும் முக்கியம். இந்த வருகையில் நடந்தவை இங்கே.",
+    sessionOnly: "இது தற்போதைய வருகைக்கு மட்டுமே",
+    questionsAnswered: "பதிலளித்த கேள்விகள்",
+    rightAnswers: "சரியான பதில்கள்",
+    learningActivity: "பயிற்சி",
+    noActivity: "இந்த வருகையின் சுருக்கத்தைப் பார்க்க ஒரு பயிற்சியை முடி.",
+    badgesTitle: "கற்றல் பதக்கங்கள்",
+    badgesPending: "பாதுகாப்பான கணக்குகளும் முன்னேற்றப் பதிவுகளும் இணைக்கப்பட்ட பிறகு பதக்கங்கள் தோன்றும்.",
+    familyTitle: "குடும்பங்களுக்கான கற்றல் பகுதி",
+    familyIntro: "பெற்றோரும் ஆசிரியரும் மாணவரின் கற்றல் பயணத்தைப் பார்க்க வடிவமைக்கப்பட்டது.",
+    parentRole: "பெற்றோர் பார்வை",
+    teacherRole: "ஆசிரியர் பார்வை",
+    parentRoleDescription: "பெற்றோர் தங்கள் குடும்பக் கணக்குடன் பாதுகாப்பாக இணைக்கப்பட்ட மாணவர்களை மட்டுமே பார்க்க வேண்டும்.",
+    teacherRoleDescription: "ஆசிரியர்கள் தங்கள் வகுப்பு அல்லது பள்ளிப் பொறுப்புக்கு அனுமதிக்கப்பட்ட மாணவர்களை மட்டுமே பார்க்க வேண்டும்.",
+    secureGateTitle: "மாணவர் தகவல் பாதுகாக்கப்படுகிறது",
+    secureGateText: "தனிப்பட்ட கற்றல் பதிவுகளைக் காட்டுவதற்கு முன், உண்மையான பலகை உன் உள்நுழைவையும் மாணவருடனான தொடர்பையும் சரிபார்க்க வேண்டும்.",
+    secureGateNote: "பாதுகாப்பான உள்நுழைவும் அனுமதிக்கப்பட்ட மாணவர் பதிவுகளும் இன்னும் இணைக்கப்படவில்லை. இந்த முன்னோட்டத்தில் மாணவர் தரவு காட்டப்படாது.",
+    dashboardFeatureOne: "கற்றல் சுருக்கம்",
+    dashboardFeatureOneText: "மாணவர் கணக்கு இணைக்கப்பட்டதும் சரிபார்க்கப்பட்ட செயல்பாடுகளையும் முன்னேற்றத்தையும் பார்.",
+    dashboardFeatureTwo: "பாடங்களும் பயிற்சியும்",
+    dashboardFeatureTwoText: "அனுமதிக்கப்பட்ட மாணவருக்கான பாடங்களையும் பயிற்சிகளையும் பார்.",
+    dashboardFeatureThree: "கற்றலுக்கு உதவு",
+    dashboardFeatureThreeText: "மாணவர் பயிற்சி செய்தவற்றையும் எளிய விளக்கம் தேவைப்படும் இடங்களையும் அறிந்துகொள்.",
+    dashboardFeatureFour: "தனியுரிமையே முதன்மை",
+    dashboardFeatureFourText: "இணைக்கப்பட்ட பெற்றோர் அல்லது அனுமதிக்கப்பட்ட ஆசிரியர் மட்டுமே மாணவர் பதிவுகளை அணுக வேண்டும்.",
+    dashboardNoRecords: "மாணவர் பதிவுகள் ஏற்றப்படவில்லை. தரவைக் காட்ட உள்நுழைவும் மாணவர் இணைப்பும் தேவை.",
+  },
+};
+
+function subjectsFor(grade: number, medium: Locale): string[] {
+  return subjectsByGradeAndMedium[String(grade)]?.[medium] ?? [];
+}
+
+function App() {
+  const [theme, setTheme] = useState<"light" | "dark">(
+    () => window.localStorage.getItem("sl-scholar-ai-theme") === "dark" ? "dark" : "light",
   );
-  const imageRoot = selected
-    ? `${getApiBaseUrl()}/learning/coloring-pages/${selected.textbook_id}`
-    : "";
+  const [locale, setLocale] = useState<Locale>("English");
+  const [bookMedium, setBookMedium] = useState<Locale>("English");
+  const [grade, setGrade] = useState(1);
+  const [subject, setSubject] = useState(subjectsFor(1, "English")[0]);
+  const [page, setPage] = useState<Page>("home");
+  const [apiStatus, setApiStatus] = useState<ApiStatus>("checking");
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [question, setQuestion] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [transformingMessageId, setTransformingMessageId] = useState<number | null>(null);
+  const [transformingAction, setTransformingAction] = useState<AnswerAction | null>(null);
+  const [transformationErrors, setTransformationErrors] = useState<Record<number, string>>({});
+  const [error, setError] = useState("");
+  const [retryQuestion, setRetryQuestion] = useState("");
+  const [authToken, setAuthToken] = useState<string | null>(null);
+  const [familyUser, setFamilyUser] = useState<FamilyUser | null>(null);
+  const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
+  const [progressRefresh, setProgressRefresh] = useState(0);
+  const nextMessageId = useRef(1);
+  const questionInput = useRef<HTMLTextAreaElement>(null);
+  const t = copy[locale];
+  const extra = extendedCopy[locale];
+  const availableSubjects = useMemo(
+    () => subjectsFor(grade, bookMedium),
+    [grade, bookMedium],
+  );
 
-  const redraw = useCallback(() => {
-    const canvas = canvasRef.current;
-    const context = canvas?.getContext("2d");
-    const basePixels = basePixelsRef.current;
-    const overlay = overlayRef.current;
-    if (!canvas || !context || !basePixels || !overlay) return;
-    const composite = context.createImageData(canvas.width, canvas.height);
-    for (let offset = 0; offset < basePixels.data.length; offset += 4) {
-      const alpha = overlay.data[offset + 3] / 255;
-      composite.data[offset] = Math.round(
-        overlay.data[offset] * alpha + basePixels.data[offset] * (1 - alpha),
-      );
-      composite.data[offset + 1] = Math.round(
-        overlay.data[offset + 1] * alpha + basePixels.data[offset + 1] * (1 - alpha),
-      );
-      composite.data[offset + 2] = Math.round(
-        overlay.data[offset + 2] * alpha + basePixels.data[offset + 2] * (1 - alpha),
-      );
-      composite.data[offset + 3] = 255;
-    }
-    context.putImageData(composite, 0, 0);
-  }, []);
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    window.localStorage.setItem("sl-scholar-ai-theme", theme);
+  }, [theme]);
 
-  const redrawStrokes = useCallback(() => {
-    const canvas = drawCanvasRef.current;
-    const context = canvas?.getContext("2d");
-    if (!canvas || !context) return;
-    context.clearRect(0, 0, canvas.width, canvas.height);
-    for (const stroke of strokesRef.current) {
-      if (!stroke.points.length) continue;
-      context.beginPath();
-      context.moveTo(stroke.points[0].x, stroke.points[0].y);
-      for (const point of stroke.points.slice(1)) {
-        context.lineTo(point.x, point.y);
-      }
-      context.strokeStyle = stroke.color;
-      context.globalCompositeOperation =
-        stroke.tool === "erase" ? "destination-out" : "source-over";
-      context.lineWidth = Math.max(8, canvas.width * 0.012);
-      context.lineCap = "round";
-      context.lineJoin = "round";
-      context.stroke();
-      if (stroke.points.length === 1) {
-        context.beginPath();
-        context.arc(
-          stroke.points[0].x,
-          stroke.points[0].y,
-          context.lineWidth / 2,
-          0,
-          Math.PI * 2,
-        );
-        context.fillStyle = stroke.color;
-        context.globalCompositeOperation =
-          stroke.tool === "erase" ? "destination-out" : "source-over";
-        context.fill();
-      }
-      context.globalCompositeOperation = "source-over";
+  useEffect(() => {
+    if (!availableSubjects.includes(subject)) {
+      setSubject(availableSubjects[0] ?? "");
     }
-  }, []);
-
-  const setupBlankCanvas = useCallback(() => {
-    const canvas = canvasRef.current;
-    const context = canvas?.getContext("2d", { willReadFrequently: true });
-    const drawCanvas = drawCanvasRef.current;
-    if (!canvas || !context || !drawCanvas) return;
-    canvas.width = linedPage ? 993 : 1404;
-    canvas.height = linedPage ? 1324 : 993;
-    drawCanvas.width = canvas.width;
-    drawCanvas.height = canvas.height;
-    context.fillStyle = "#fff";
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    if (linedPage) {
-      const lineSpacing = 28;
-      const marginX = canvas.width * 0.125;
-      for (let y = 84, lineIndex = 0; y < canvas.height; y += lineSpacing, lineIndex += 1) {
-        context.beginPath();
-        context.strokeStyle = lineIndex % 4 < 2 ? "#df7777" : "#6ec6e7";
-        context.lineWidth = 1.5;
-        context.moveTo(0, y);
-        context.lineTo(canvas.width, y);
-        context.stroke();
-      }
-      context.beginPath();
-      context.strokeStyle = "#d9534f";
-      context.lineWidth = 2;
-      context.moveTo(marginX, 0);
-      context.lineTo(marginX, canvas.height);
-      context.stroke();
-    }
-    basePixelsRef.current = context.getImageData(0, 0, canvas.width, canvas.height);
-    overlayRef.current = context.createImageData(canvas.width, canvas.height);
-    undoRef.current = [];
-    strokesRef.current = [];
-    activeStrokeRef.current = null;
-    redrawStrokes();
-    setFeedback("");
-  }, [linedPage, redrawStrokes]);
+  }, [availableSubjects, subject]);
 
   useEffect(() => {
     const controller = new AbortController();
-    setLoading(true);
-    setActivities([]);
-    setSelectedId("");
-    setError("");
-    setFeedback("");
-    void fetch(
-      `${getApiBaseUrl()}/learning/coloring-pages?grade=${grade}&medium=${medium}&subject=${encodeURIComponent(subject)}`,
-      { signal: controller.signal },
-    )
-      .then(async (response) => {
-        const payload: unknown = await response.json().catch(() => null);
-        if (!response.ok || !Array.isArray(payload) || !payload.every(isActivity)) {
-          const detail =
-            typeof payload === "object" &&
-            payload !== null &&
-            "detail" in payload &&
-            typeof payload.detail === "string"
-              ? payload.detail
-              : labels.loadError;
-          throw new Error(detail);
+    fetch(`${getApiBaseUrl()}/health`, { signal: controller.signal })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error("Health check failed.");
         }
-        setActivities(payload);
-        if (payload[0]) {
-          setSelectedId(`${payload[0].textbook_id}:${payload[0].exercise_page}`);
-        }
+        setApiStatus("online");
       })
-      .catch((requestError: unknown) => {
-        if (
-          requestError instanceof DOMException &&
-          requestError.name === "AbortError"
-        ) {
+      .catch((fetchError: unknown) => {
+        if (fetchError instanceof DOMException && fetchError.name === "AbortError") {
           return;
         }
-        setError(
-          requestError instanceof Error ? requestError.message : labels.loadError,
-        );
-      })
-      .finally(() => setLoading(false));
+        setApiStatus("offline");
+      });
     return () => controller.abort();
-  }, [grade, medium, subject, labels.loadError]);
+  }, []);
 
-  const setupCanvas = useCallback(() => {
-    const canvas = canvasRef.current;
-    const context = canvas?.getContext("2d", { willReadFrequently: true });
-    const image = document.getElementById("coloring-exercise-source");
-    if (
-      !canvas ||
-      !context ||
-      !(image instanceof HTMLImageElement) ||
-      !image.complete ||
-      !image.naturalWidth
-    ) {
-      setError(labels.loadError);
+  async function askTutor(text: string) {
+    const trimmed = text.trim();
+    if (!trimmed || busy || !subject) {
       return;
     }
-    canvas.width = image.naturalWidth;
-    canvas.height = image.naturalHeight;
-    const drawCanvas = drawCanvasRef.current;
-    if (drawCanvas) {
-      drawCanvas.width = image.naturalWidth;
-      drawCanvas.height = image.naturalHeight;
-    }
-    context.clearRect(0, 0, canvas.width, canvas.height);
-    context.drawImage(image, 0, 0);
-    basePixelsRef.current = context.getImageData(0, 0, canvas.width, canvas.height);
-    overlayRef.current = context.createImageData(canvas.width, canvas.height);
-    undoRef.current = [];
-    strokesRef.current = [];
-    activeStrokeRef.current = null;
-    redrawStrokes();
+
+    setMessages((current) => [
+      ...current,
+      { id: nextMessageId.current++, role: "student", text: trimmed },
+    ]);
+    setQuestion("");
+    setBusy(true);
     setError("");
-    setFeedback("");
-  }, [labels.loadError, redrawStrokes]);
+    setRetryQuestion("");
+    setPage("tutor");
 
-  useEffect(() => {
-    if (blankPage) setupBlankCanvas();
-  }, [blankPage, linedPage, setupBlankCanvas]);
-
-  useEffect(() => {
-    if (blankPage) return;
-    if (!selected) return;
-    const image = document.getElementById("coloring-exercise-source");
-    if (image instanceof HTMLImageElement && image.complete && image.naturalWidth) {
-      setupCanvas();
-    }
-  }, [blankPage, selectedId, selected, setupCanvas]);
-
-  function pointOnCanvas(
-    event: PointerEvent<HTMLCanvasElement>,
-  ): DrawPoint | null {
-    const canvas = drawCanvasRef.current;
-    if (!canvas) return null;
-    const bounds = canvas.getBoundingClientRect();
-    if (!bounds.width || !bounds.height) return null;
-    return {
-      x: ((event.clientX - bounds.left) / bounds.width) * canvas.width,
-      y: ((event.clientY - bounds.top) / bounds.height) * canvas.height,
-    };
-  }
-
-  function startStroke(event: PointerEvent<HTMLCanvasElement>) {
-    if ((!drawMode && !eraserMode) || (event.pointerType === "mouse" && event.button !== 0)) return;
-    const canvas = drawCanvasRef.current;
-    const context = canvas?.getContext("2d");
-    const point = pointOnCanvas(event);
-    if (!canvas || !context || !point) return;
-    event.preventDefault();
-    if (event.isTrusted) {
-      event.currentTarget.setPointerCapture(event.pointerId);
-    }
-    const stroke: DrawStroke = {
-      color,
-      points: [point],
-      tool: eraserMode ? "erase" : "draw",
-    };
-    activeStrokeRef.current = stroke;
-    context.beginPath();
-    context.arc(
-      point.x,
-      point.y,
-      Math.max(4, canvas.width * 0.006),
-      0,
-      Math.PI * 2,
-    );
-    context.globalCompositeOperation =
-      stroke.tool === "erase" ? "destination-out" : "source-over";
-    context.fillStyle = color;
-    context.fill();
-    context.globalCompositeOperation = "source-over";
-  }
-
-  function continueStroke(event: PointerEvent<HTMLCanvasElement>) {
-    const stroke = activeStrokeRef.current;
-    const canvas = drawCanvasRef.current;
-    const context = canvas?.getContext("2d");
-    const point = pointOnCanvas(event);
-    if ((!drawMode && !eraserMode) || !stroke || !canvas || !context || !point) return;
-    event.preventDefault();
-    const previous = stroke.points[stroke.points.length - 1];
-    if (!previous) return;
-    stroke.points.push(point);
-    context.beginPath();
-    context.moveTo(previous.x, previous.y);
-    context.lineTo(point.x, point.y);
-    context.globalCompositeOperation =
-      stroke.tool === "erase" ? "destination-out" : "source-over";
-    context.strokeStyle = stroke.color;
-    context.lineWidth = Math.max(8, canvas.width * 0.012);
-    context.lineCap = "round";
-    context.lineJoin = "round";
-    context.stroke();
-    context.globalCompositeOperation = "source-over";
-  }
-
-  function finishStroke(event: PointerEvent<HTMLCanvasElement>) {
-    const stroke = activeStrokeRef.current;
-    if (!stroke) return;
-    activeStrokeRef.current = null;
-    strokesRef.current = [...strokesRef.current, stroke];
-    undoRef.current = [...undoRef.current.slice(-19), { type: "stroke" }];
-    setFeedback(labels.painted);
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-  }
-
-  function fillAt(event: ReactMouseEvent<HTMLCanvasElement>) {
-    const canvas = canvasRef.current;
-    const basePixels = basePixelsRef.current;
-    const overlay = overlayRef.current;
-    if (!canvas || !basePixels || !overlay) return;
-    const bounds = canvas.getBoundingClientRect();
-    const x = Math.floor(((event.clientX - bounds.left) / bounds.width) * canvas.width);
-    const y = Math.floor(((event.clientY - bounds.top) / bounds.height) * canvas.height);
-    if (x < 0 || y < 0 || x >= canvas.width || y >= canvas.height) return;
-
-    const { width, height } = canvas;
-    const start = y * width + x;
-    const startByte = start * 4;
-    if (!canFill(basePixels.data, startByte)) {
-      setFeedback(labels.notRegion);
-      return;
-    }
-
-    const totalPixels = width * height;
-    const maximumRegion = Math.floor(totalPixels * 0.12);
-    const queue = new Int32Array(maximumRegion + 1);
-    const visited = new Uint8Array(totalPixels);
-    let readIndex = 0;
-    let writeIndex = 1;
-    queue[0] = start;
-    visited[start] = 1;
-    let tooLarge = false;
-    while (readIndex < writeIndex) {
-      const pixel = queue[readIndex++];
-      const px = pixel % width;
-      const py = Math.floor(pixel / width);
-      const neighbors = [
-        px > 0 ? pixel - 1 : -1,
-        px < width - 1 ? pixel + 1 : -1,
-        py > 0 ? pixel - width : -1,
-        py < height - 1 ? pixel + width : -1,
-      ];
-      for (const neighbor of neighbors) {
-        if (neighbor < 0 || visited[neighbor]) continue;
-        visited[neighbor] = 1;
-        if (!canFill(basePixels.data, neighbor * 4)) continue;
-        if (writeIndex >= maximumRegion) {
-          tooLarge = true;
-          break;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 90_000);
+    try {
+      const response = await fetch(`${getApiBaseUrl()}/learning/ask`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          question: trimmed,
+          grade,
+          subject,
+          medium: bookMedium,
+          answer_language: locale,
+          conversation_history: messages
+            .filter((message) => !(message.role === "student" && message.text === trimmed))
+            .slice(-8)
+            .map(({ role, text }) => ({ role, text })),
+        }),
+      });
+      const payload: unknown = await response.json().catch(() => null);
+      if (!response.ok) {
+        const detailValue =
+          typeof payload === "object" && payload !== null && "detail" in payload
+            ? payload.detail
+            : null;
+        if (
+          response.status === 503 &&
+          typeof detailValue === "object" &&
+          detailValue !== null &&
+          "code" in detailValue &&
+          detailValue.code === "tutor_temporarily_busy"
+        ) {
+          throw new Error(t.tutorBusy);
         }
-        queue[writeIndex++] = neighbor;
+        const detail =
+          typeof detailValue === "string"
+            ? detailValue
+            : `${t.errorPrefix} ${t.tryAgain}`;
+        throw new Error(detail);
       }
-      if (tooLarge) break;
+      if (!isLearningAnswer(payload)) {
+        throw new Error(`${t.errorPrefix} ${t.tryAgain}`);
+      }
+      setMessages((current) => [
+        ...current,
+        {
+          id: nextMessageId.current++,
+          role: "tutor",
+          text: payload.answer,
+          status: payload.status,
+          sources: payload.sources,
+          question: trimmed,
+          grade,
+          subject,
+          medium: bookMedium,
+          answerLanguage: locale,
+        },
+      ]);
+    } catch (requestError: unknown) {
+      const message =
+        requestError instanceof DOMException && requestError.name === "AbortError"
+          ? t.tryAgain
+          : requestError instanceof Error
+            ? requestError.message
+            : t.tryAgain;
+      setError(message);
+      setRetryQuestion(trimmed);
+    } finally {
+      window.clearTimeout(timeout);
+      setBusy(false);
     }
-    if (tooLarge) {
-      setFeedback(labels.tooLarge);
+  }
+
+  function handleQuestionSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void askTutor(question);
+  }
+
+  async function transformAnswer(
+    message: ChatMessage,
+    action: AnswerAction,
+    targetLanguage?: Locale,
+  ) {
+    if (
+      transformingMessageId !== null ||
+      !message.question ||
+      message.grade === undefined ||
+      !message.subject ||
+      !message.medium ||
+      !message.answerLanguage
+    ) {
       return;
     }
-
-    const changedPixels: number[] = [];
-    const red = Number.parseInt(color.slice(1, 3), 16);
-    const green = Number.parseInt(color.slice(3, 5), 16);
-    const blue = Number.parseInt(color.slice(5, 7), 16);
-    const previousOverlay = new Uint8ClampedArray(writeIndex * 4);
-    for (let index = 0; index < writeIndex; index += 1) {
-      const pixel = queue[index];
-      const offset = pixel * 4;
-      previousOverlay[index * 4] = overlay.data[offset];
-      previousOverlay[index * 4 + 1] = overlay.data[offset + 1];
-      previousOverlay[index * 4 + 2] = overlay.data[offset + 2];
-      previousOverlay[index * 4 + 3] = overlay.data[offset + 3];
-      overlay.data[offset] = red;
-      overlay.data[offset + 1] = green;
-      overlay.data[offset + 2] = blue;
-      overlay.data[offset + 3] = 230;
-      changedPixels.push(pixel);
+    setTransformingMessageId(message.id);
+    setTransformingAction(action);
+    setTransformationErrors((current) => ({ ...current, [message.id]: "" }));
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 90_000);
+    try {
+      const response = await fetch(`${getApiBaseUrl()}/learning/transform-answer`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          answer: message.text,
+          question: message.question,
+          grade: message.grade,
+          subject: message.subject,
+          medium: message.medium,
+          answer_language: message.answerLanguage,
+          action,
+          ...(targetLanguage ? { target_language: targetLanguage } : {}),
+        }),
+      });
+      const payload: unknown = await response.json().catch(() => null);
+      if (!response.ok) {
+        const detail =
+          typeof payload === "object" && payload !== null && "detail" in payload
+            ? payload.detail
+            : null;
+        if (
+          response.status === 503 &&
+          typeof detail === "object" &&
+          detail !== null &&
+          "code" in detail &&
+          detail.code === "tutor_temporarily_busy"
+        ) {
+          throw new Error(t.tutorBusy);
+        }
+        if (typeof detail === "string" && detail.trim()) {
+          throw new Error(detail);
+        }
+        throw new Error(`${t.transformationFailed} (${response.status})`);
+      }
+      if (
+        typeof payload !== "object" ||
+        payload === null ||
+        !("answer" in payload) ||
+        typeof payload.answer !== "string" ||
+        !payload.answer.trim()
+      ) {
+        throw new Error(t.transformationFailed);
+      }
+      const transformedText = payload.answer.trim();
+      const language = action === "translate"
+        ? targetLanguage ?? message.answerLanguage
+        : message.answerLanguage;
+      setMessages((current) =>
+        current.map((item) => item.id !== message.id
+          ? item
+          : {
+              ...item,
+              transformations: [
+                ...(item.transformations ?? []).filter(
+                  (transformation) =>
+                    transformation.action !== action ||
+                    transformation.language !== language,
+                ),
+                { action, language, text: transformedText },
+              ],
+            }),
+      );
+    } catch (requestError: unknown) {
+      setTransformationErrors((current) => ({
+        ...current,
+        [message.id]:
+          requestError instanceof DOMException && requestError.name === "AbortError"
+            ? t.tryAgain
+            : requestError instanceof Error
+              ? requestError.message
+              : t.transformationFailed,
+      }));
+    } finally {
+      window.clearTimeout(timeout);
+      setTransformingMessageId(null);
+      setTransformingAction(null);
     }
-    undoRef.current = [
-      ...undoRef.current.slice(-19),
-      {
-        type: "fill",
-        entry: { pixels: changedPixels, previousOverlay },
-      },
-    ];
-    redraw();
-    setFeedback(labels.painted);
   }
 
-  function undoLastColor() {
-    const canvas = canvasRef.current;
-    const overlay = overlayRef.current;
-    const action = undoRef.current.pop();
-    if (!action) return;
-    if (action.type === "stroke") {
-      strokesRef.current = strokesRef.current.slice(0, -1);
-      redrawStrokes();
-      setFeedback(labels.undoDone);
+  function handleQuestionKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      event.currentTarget.form?.requestSubmit();
+    }
+  }
+
+  function startNewChat() {
+    if (messages.length && !window.confirm(t.clearConfirm)) {
       return;
     }
-    if (!canvas || !overlay) return;
-    const { entry } = action;
-    for (let index = 0; index < entry.pixels.length; index += 1) {
-      const pixel = entry.pixels[index];
-      if (pixel === undefined) continue;
-      const offset = pixel * 4;
-      overlay.data[offset] = entry.previousOverlay[index * 4] ?? 0;
-      overlay.data[offset + 1] = entry.previousOverlay[index * 4 + 1] ?? 0;
-      overlay.data[offset + 2] = entry.previousOverlay[index * 4 + 2] ?? 0;
-      overlay.data[offset + 3] = entry.previousOverlay[index * 4 + 3] ?? 0;
-    }
-    redraw();
-    setFeedback(labels.undoDone);
-  }
-
-  function resetPage() {
-    const overlay = overlayRef.current;
-    if (!overlay) return;
-    overlay.data.fill(0);
-    undoRef.current = [];
-    strokesRef.current = [];
-    activeStrokeRef.current = null;
-    redraw();
-    redrawStrokes();
-    setFeedback(labels.resetDone);
-  }
-
-  function changePageMode(mode: "textbook" | "blank" | "lined") {
-    const showBlankPage = mode !== "textbook";
-    if (blankPage === showBlankPage && linedPage === (mode === "lined")) return;
-    setBlankPage(showBlankPage);
-    setLinedPage(mode === "lined");
-    setDrawMode(showBlankPage);
-    setEraserMode(false);
-    setShowReference(false);
-    setFeedback("");
+    setMessages([]);
     setError("");
+    setRetryQuestion("");
+    setQuestion("");
   }
+
+  function openTutor() {
+    setPage("tutor");
+    window.requestAnimationFrame(() => questionInput.current?.focus());
+  }
+
+  const handleSession = useCallback(
+    (token: string | null, user: FamilyUser | null) => {
+      setAuthToken(token);
+      setFamilyUser(user);
+      if (!token) setSelectedStudent(null);
+    },
+    [],
+  );
+  const handleStudentSelected = useCallback((student: Student | null) => {
+    setSelectedStudent(student);
+    if (student) setGrade(student.grade);
+  }, []);
+  const latestTutorText =
+    [...messages].reverse().find((message) => message.role === "tutor")?.text ?? "";
+
+  const statusLabel = {
+    checking: t.apiChecking,
+    online: t.apiOnline,
+    offline: t.apiOffline,
+  }[apiStatus];
 
   return (
-    <section className="coloring-activity" aria-labelledby="coloring-title">
-      <div className="coloring-heading">
-        <span className="coloring-icon" aria-hidden="true">🎨</span>
-        <div>
-          <p className="eyebrow">{labels.title}</p>
-          <h2 id="coloring-title">{labels.title}</h2>
-          <p>{labels.intro}</p>
+    <div className="app-shell">
+      <aside className="sidebar" aria-label={t.regionNav}>
+        <a className="brand" href="#home" onClick={() => setPage("home")}>
+          <img className="brand-logo" src="/sl-scholar-ai-logo.png" alt={t.brand} />
+        </a>
+
+        <nav className="main-nav" aria-label={t.regionNav}>
+          <button className={page === "home" ? "nav-item active" : "nav-item"} onClick={() => setPage("home")}>
+            <span aria-hidden="true">⌂</span>{t.home}
+          </button>
+          <button className={page === "tutor" ? "nav-item active" : "nav-item"} onClick={openTutor}>
+            <span aria-hidden="true">✎</span>{t.tutor}
+          </button>
+          <button className={page === "practice" ? "nav-item active" : "nav-item"} onClick={() => setPage("practice")}>
+            <span aria-hidden="true">✿</span>{t.practice}
+          </button>
+          <button className={page === "coloring" ? "nav-item active" : "nav-item"} onClick={() => setPage("coloring")}>
+            <span aria-hidden="true">🎨</span>{t.coloringNav}
+          </button>
+          <button className={page === "progress" ? "nav-item active" : "nav-item"} onClick={() => setPage("progress")}>
+            <span aria-hidden="true">◷</span>{t.progress}
+          </button>
+          <button className={page === "family" ? "nav-item active" : "nav-item"} onClick={() => setPage("family")}>
+            <span aria-hidden="true">♡</span>{extra.family}
+          </button>
+        </nav>
+
+        <div className="sidebar-note">
+          <span className={`status-dot status-dot--${apiStatus}`} aria-hidden="true" />
+          <span>
+            <strong>{t.status}</strong>
+            <small role="status">{statusLabel}</small>
+          </span>
         </div>
-      </div>
-      <div className="coloring-tools" role="group" aria-label={labels.title}>
-        <button
-          type="button"
-          className={!blankPage ? "primary-button" : "secondary-button"}
-          aria-pressed={!blankPage}
-          onClick={() => changePageMode("textbook")}
-        >
-          {labels.textbookPage}
-        </button>
-        <button
-          type="button"
-          className={blankPage && !linedPage ? "primary-button" : "secondary-button"}
-          aria-pressed={blankPage && !linedPage}
-          onClick={() => changePageMode("blank")}
-        >
-          {labels.blankPage}
-        </button>
-        <button
-          type="button"
-          className={linedPage ? "primary-button" : "secondary-button"}
-          aria-pressed={linedPage}
-          onClick={() => changePageMode("lined")}
-        >
-          {labels.linedPage}
-        </button>
-      </div>
-      {!blankPage && <div className="coloring-picker">
-        <label htmlFor="coloring-activity-select">{labels.choose}</label>
-        <select
-          id="coloring-activity-select"
-          value={selectedId}
-          onChange={(event) => {
-            setSelectedId(event.target.value);
-            basePixelsRef.current = null;
-            overlayRef.current = null;
-            undoRef.current = [];
-            strokesRef.current = [];
-            activeStrokeRef.current = null;
-            setFeedback("");
-            setError("");
-          }}
-          disabled={loading || !activities.length}
-        >
-          <option value="">{labels.selectPlaceholder}</option>
-          {activities.map((activity) => (
-            <option
-              key={`${activity.textbook_id}:${activity.exercise_page}`}
-              value={`${activity.textbook_id}:${activity.exercise_page}`}
-            >
-              {activity.textbook_title !== "unknown"
-                ? activity.textbook_title
-                : activity.source_file.split(/[\\/]/).pop()}{" "}
-              · {labels.page} {activity.exercise_page}
-            </option>
-          ))}
-        </select>
-      </div>}
-      {loading && <p className="loading-message" role="status">{labels.loading}</p>}
-      {!blankPage && !loading && !activities.length && (
-        <p className="coloring-empty" role="status">{labels.none}</p>
-      )}
-      {(selected || blankPage) && (
-        <>
-          <p className="coloring-instructions">
-            {linedPage ? labels.linedHint : blankPage ? labels.blankHint : drawMode || eraserMode ? labels.drawHint : labels.fillHint}
-          </p>
-          <div className="coloring-tools" role="group" aria-label={labels.title}>
-            {!blankPage && <button
-                type="button"
-                className={!drawMode && !eraserMode ? "primary-button" : "secondary-button"}
-                aria-pressed={!drawMode && !eraserMode}
-                onClick={() => {
-                  setDrawMode(false);
-                  setEraserMode(false);
-                }}
-              >
-                {labels.fillTool}
-              </button>}
-            <button
-              type="button"
-              className={drawMode && !eraserMode ? "primary-button" : "secondary-button"}
-              aria-pressed={drawMode && !eraserMode}
-              onClick={() => {
-                setDrawMode(true);
-                setEraserMode(false);
-              }}
-            >
-              ✎ {labels.drawTool}
-            </button>
-            <button
-              type="button"
-              className={eraserMode ? "primary-button" : "secondary-button"}
-              aria-pressed={eraserMode}
-              onClick={() => {
-                setDrawMode(false);
-                setEraserMode(true);
-              }}
-            >
-              {labels.eraserTool}
-            </button>
+
+        <p className="sidebar-footer">{t.sidebarFooter}</p>
+      </aside>
+
+      <main className="main-area">
+        <header className="topbar">
+          <div className="mobile-brand">
+            <img className="mobile-brand-logo" src="/sl-scholar-ai-logo.png" alt={t.brand} />
           </div>
-          <div className={showReference && !blankPage ? "coloring-pages coloring-pages--reference" : "coloring-pages"}>
-            {showReference && !blankPage && selected && (
-              <article className="coloring-page-panel">
-                <h3>{labels.reference} · {labels.page} {selected.reference_page}</h3>
-                <img
-                  crossOrigin="anonymous"
-                  src={`${imageRoot}/${selected.exercise_page}.png?kind=reference&v=1`}
-                  alt={`${labels.reference}, ${labels.page} ${selected.reference_page}`}
-                  onError={() => setError(labels.loadError)}
-                />
-              </article>
-            )}
-            <article className="coloring-page-panel">
-              <h3>{linedPage ? labels.linedExercise : blankPage ? labels.blankExercise : `${labels.exercise} · ${labels.page} ${selected?.exercise_page}`}</h3>
-              {!blankPage && selected && <img
-                  id="coloring-exercise-source"
-                  crossOrigin="anonymous"
-                  src={`${imageRoot}/${selected.exercise_page}.png?kind=exercise&v=1`}
-                  alt={labels.ariaCanvas}
-                  onLoad={setupCanvas}
-                  onError={() => setError(labels.loadError)}
-                  hidden
-                />}
-              <div className="coloring-canvas-stack">
-                <canvas
-                  ref={canvasRef}
-                  className="coloring-canvas"
-                  onClick={(event) => {
-                    if (!blankPage && !drawMode && !eraserMode) fillAt(event);
-                  }}
-                  aria-label={linedPage ? labels.linedHint : blankPage ? labels.blankHint : labels.ariaCanvas}
-                />
-                <canvas
-                  ref={drawCanvasRef}
-                  className={
-                    drawMode || eraserMode
-                      ? "coloring-draw-canvas coloring-draw-canvas--active"
-                      : "coloring-draw-canvas"
-                  }
-                  onPointerDown={startStroke}
-                  onPointerMove={continueStroke}
-                  onPointerUp={finishStroke}
-                  onPointerCancel={finishStroke}
-                  aria-label={linedPage ? labels.linedHint : blankPage ? labels.blankHint : labels.drawHint}
-                />
+          <div className="topbar-spacer" />
+          <label className="language-control">
+            <span className="sr-only">Interface language</span>
+            <span aria-hidden="true">文</span>
+            <select value={locale} onChange={(event) => setLocale(event.target.value as Locale)}>
+              <option value="English">English</option>
+              <option value="Sinhala">සිංහල</option>
+              <option value="Tamil">தமிழ்</option>
+            </select>
+          </label>
+          <button
+            className="theme-toggle"
+            type="button"
+            onClick={() => setTheme((current) => current === "light" ? "dark" : "light")}
+            aria-label={theme === "light" ? t.switchToDarkMode : t.switchToLightMode}
+            aria-pressed={theme === "dark"}
+            title={theme === "light" ? t.switchToDarkMode : t.switchToLightMode}
+          >
+            <span aria-hidden="true">{theme === "light" ? "☾" : "☀"}</span>
+          </button>
+          <div className="student-avatar" aria-label="Student profile">🌱</div>
+        </header>
+
+        {page === "home" && (
+          <section className="content home-content" aria-labelledby="welcome-title">
+            <div className="welcome-banner">
+              <div className="welcome-copy">
+                <p className="eyebrow">{t.regionGrade}</p>
+                <h1 id="welcome-title">{t.welcome}</h1>
+                <p>{t.welcomeText}</p>
               </div>
-              {selected && !blankPage && <p className="coloring-source">
-                {labels.source}: {selected.textbook_title !== "unknown"
-                  ? selected.textbook_title
-                  : selected.source_file.split(/[\\/]/).pop()}{" "}
-                · {labels.page} {selected.exercise_page}
-              </p>}
-            </article>
-          </div>
-          <div className="color-palette" role="group" aria-label={labels.colour}>
-            <span>{labels.colour}</span>
-            {palettes.map((paletteColor) => (
-              <button
-                type="button"
-                key={paletteColor}
-                className={color === paletteColor ? "color-swatch color-swatch--selected" : "color-swatch"}
-                style={{ backgroundColor: paletteColor }}
-                onClick={() => setColor(paletteColor)}
-                aria-label={`${labels.colour} ${paletteColor}`}
-                aria-pressed={color === paletteColor}
-              />
-            ))}
-            <span className="selected-color-label">{labels.selected}</span>
-            <input
-              type="color"
-              value={color}
-              onChange={(event) => setColor(event.target.value)}
-              aria-label={labels.colour}
+              <div className="welcome-art" aria-hidden="true">
+                <span className="sun">☀</span>
+                <span className="book-art">📚</span>
+                <span className="sparkle sparkle-one">✦</span>
+                <span className="sparkle sparkle-two">✧</span>
+              </div>
+            </div>
+
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">{t.exploreEyebrow}</p>
+                <h2>{t.subjects}</h2>
+                <p className="muted">{t.subjectHelp}</p>
+              </div>
+              <div className="grade-picker">
+                <label htmlFor="grade-select">{t.grade}</label>
+                <select id="grade-select" value={grade} onChange={(event) => setGrade(Number(event.target.value))}>
+                  {[1, 2, 3, 4, 5].map((value) => (
+                    <option key={value} value={value}>{t.gradeOption} {value}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="filter-row">
+              <label htmlFor="book-language">{t.textbookLanguage}</label>
+              <select id="book-language" value={bookMedium} onChange={(event) => setBookMedium(event.target.value as Locale)}>
+                <option value="English">English</option>
+                <option value="Sinhala">සිංහල</option>
+                <option value="Tamil">தமிழ்</option>
+              </select>
+              <span className="filter-divider" aria-hidden="true" />
+              <label htmlFor="answer-language">{t.answerLanguage}</label>
+              <select id="answer-language" value={locale} onChange={(event) => setLocale(event.target.value as Locale)}>
+                <option value="English">English</option>
+                <option value="Sinhala">සිංහල</option>
+                <option value="Tamil">தமிழ்</option>
+              </select>
+            </div>
+
+            {availableSubjects.length ? (
+              <div
+                className={`subject-grid${availableSubjects.length === 1 ? " subject-grid--single" : ""}`}
+                aria-label={t.subjects}
+              >
+                {availableSubjects.map((item, index) => (
+                  <button
+                    className={`subject-card${subject === item ? " subject-card--selected" : ""}`}
+                    key={item}
+                    onClick={() => {
+                      setSubject(item);
+                      openTutor();
+                    }}
+                  >
+                    <span className={`subject-icon subject-icon--${index % 4}`} aria-hidden="true">
+                      {["✎", "◉", "❋", "⌘"][index % 4]}
+                    </span>
+                    <span className="subject-name">{item}</span>
+                    <span className="subject-arrow" aria-hidden="true">→</span>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p className="empty-state">{t.noSubjects}</p>
+            )}
+
+            <div className="home-lower-grid">
+              <button className="tutor-promo" onClick={openTutor}>
+                <span className="promo-icon" aria-hidden="true">💬</span>
+                <span>
+                  <strong>{t.ask}</strong>
+                  <small>{t.tutorHelp}</small>
+                </span>
+                <span className="subject-arrow" aria-hidden="true">→</span>
+              </button>
+              <div className="honesty-card">
+                <span className="honesty-icon" aria-hidden="true">📖</span>
+                <div>
+                  <strong>{t.emptyTitle}</strong>
+                  <p>{t.emptyText}</p>
+                </div>
+              </div>
+            </div>
+
+            <button className="dashboard-limitation dashboard-link" onClick={() => setPage("family")}>
+              {t.parentTeacher} <span aria-hidden="true">→</span>
+            </button>
+          </section>
+        )}
+
+        {page === "tutor" && (
+          <section className="content tutor-content" aria-labelledby="tutor-title">
+            <div className="tutor-heading">
+              <div>
+                <p className="eyebrow">{t.tutorEyebrow}</p>
+                <h1 id="tutor-title">{t.tutor}</h1>
+                <p className="muted">{t.tutorHelp}</p>
+              </div>
+              <button className="secondary-button" onClick={startNewChat} disabled={transformingMessageId !== null}>＋ {t.clear}</button>
+            </div>
+
+            <div className="chat-context">
+              <label>
+                <span>{t.grade}</span>
+                <select value={grade} onChange={(event) => setGrade(Number(event.target.value))}>
+                  {[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{t.gradeOption} {value}</option>)}
+                </select>
+              </label>
+              <label>
+                <span>{t.textbookLanguage}</span>
+                <select value={bookMedium} onChange={(event) => setBookMedium(event.target.value as Locale)}>
+                  <option value="English">English</option>
+                  <option value="Sinhala">සිංහල</option>
+                  <option value="Tamil">தமிழ்</option>
+                </select>
+              </label>
+              <label>
+                <span>{t.subjects}</span>
+                <select value={subject} onChange={(event) => setSubject(event.target.value)}>
+                  {availableSubjects.map((item) => <option key={item} value={item}>{item}</option>)}
+                </select>
+              </label>
+            </div>
+
+            <div className="chat-panel">
+              <div className="chat-toolbar">
+                <span><span className="tutor-avatar" aria-hidden="true">✦</span>{t.tutor}</span>
+                <span className={`connection-pill connection-pill--${apiStatus}`}>
+                  <span className="status-dot" aria-hidden="true" />{statusLabel}
+                </span>
+              </div>
+
+              <div className="messages" aria-label={t.regionChat} aria-live="polite">
+                {!messages.length && (
+                  <div className="chat-empty">
+                    <span className="chat-empty-icon" aria-hidden="true">📚</span>
+                    <h2>{t.tutorWelcome}</h2>
+                    <p>{t.tutorHelp}</p>
+                  </div>
+                )}
+                {messages.map((message) => (
+                  <article className={`message message--${message.role}`} key={message.id}>
+                    <div className="message-avatar" aria-hidden="true">
+                      {message.role === "student" ? "🌱" : "✦"}
+                    </div>
+                    <div className="message-body">
+                      <p className="message-label">{message.role === "student" ? t.selected : t.brand}</p>
+                      <p className="message-text">{message.text}</p>
+                      {message.role === "tutor" && message.status === "grounded" && message.answerLanguage && (
+                        <>
+                          <div className="answer-actions" aria-label={t.answerActions}>
+                            {[...(["English", "Sinhala", "Tamil"] as const)]
+                              .filter((language) => language !== message.answerLanguage)
+                              .map((language) => (
+                                <button
+                                  className="answer-action"
+                                  key={language}
+                                  type="button"
+                                  disabled={transformingMessageId !== null}
+                                  onClick={() => void transformAnswer(message, "translate", language)}
+                                >
+                                  {t.translateTo} {language}
+                                </button>
+                              ))}
+                            <button
+                              className="answer-action"
+                              type="button"
+                              disabled={transformingMessageId !== null}
+                              onClick={() => void transformAnswer(message, "explain")}
+                            >
+                              {t.moreExplanation}
+                            </button>
+                            <button
+                              className="answer-action"
+                              type="button"
+                              disabled={transformingMessageId !== null}
+                              onClick={() => void transformAnswer(message, "short")}
+                            >
+                              {t.shortAnswer}
+                            </button>
+                          </div>
+                          {transformingMessageId === message.id && (
+                            <p className="answer-action-status" role="status">
+                              {transformingAction === "translate"
+                                ? t.translating
+                                : transformingAction === "explain"
+                                  ? t.explaining
+                                  : t.shortening}
+                            </p>
+                          )}
+                          {transformationErrors[message.id] && (
+                            <p className="answer-action-error" role="alert">{transformationErrors[message.id]}</p>
+                          )}
+                          {!!message.transformations?.length && (
+                            <div className="answer-transformations">
+                              {message.transformations.map((transformation) => (
+                                <section
+                                  className="answer-transformation"
+                                  key={`${transformation.action}:${transformation.language}`}
+                                >
+                                  <p className="answer-transformation-label">
+                                    {transformation.action === "translate"
+                                      ? `${t.translatedAnswer} ${transformation.language}`
+                                      : transformation.action === "explain"
+                                        ? t.moreExplanation
+                                        : t.shortAnswer}
+                                  </p>
+                                  <p className="message-text">{transformation.text}</p>
+                                </section>
+                              ))}
+                            </div>
+                          )}
+                        </>
+                      )}
+                      {message.role === "tutor" && message.status === "grounded" && (
+                        <p className="grounded-label">✓ {t.verified}</p>
+                      )}
+                      {message.role === "tutor" && message.status === "general" && (
+                        <p className="general-label">{t.generalAnswer}</p>
+                      )}
+                      {message.role === "tutor" && message.status === "abstained" && (
+                        <p className="abstained-label">{t.abstained}</p>
+                      )}
+                      {!!message.sources?.length && (
+                        <div className="source-list">
+                          {message.sources.map((source) => (
+                            <div className="source-card" key={source.chunk_id}>
+                              <span className="source-icon" aria-hidden="true">📖</span>
+                              <span>
+                                <strong>{source.textbook_title ?? source.source_file.split(/[\\/]/).pop()}</strong>
+                                <small>{t.page} {source.pdf_page_number}
+                                  {source.chapter ? ` · ${t.chapter} ${source.chapter}` : ""}
+                                  {source.lesson ? ` · ${t.lesson} ${source.lesson}` : ""}
+                                </small>
+                              </span>
+                            </div>
+                          ))}
+                          <small className="source-note">{t.sourceNote}</small>
+                        </div>
+                      )}
+                    </div>
+                  </article>
+                ))}
+                {busy && (
+                  <div className="loading-message" role="status">
+                    <span className="loading-orb" aria-hidden="true">✦</span>
+                    <span>{t.loading}</span>
+                    <span className="loading-dots" aria-hidden="true">•••</span>
+                  </div>
+                )}
+                {error && (
+                  <div className="request-error" role="alert">
+                    <span>{t.errorPrefix} {error}</span>
+                    <button className="text-button" onClick={() => void askTutor(retryQuestion)} disabled={busy}>
+                      {t.retry}
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <form className="question-form" onSubmit={handleQuestionSubmit}>
+                <VoiceControls
+                  locale={locale}
+                  latestTutorText={latestTutorText}
+                  onTranscript={(transcript) =>
+                    setQuestion((current) =>
+                      `${current}${current.trim() ? " " : ""}${transcript}`,
+                    )
+                  }
+                />
+                <label className="sr-only" htmlFor="student-question">{t.question}</label>
+                <textarea
+                  id="student-question"
+                  ref={questionInput}
+                  value={question}
+                  onChange={(event) => setQuestion(event.target.value)}
+                  onKeyDown={handleQuestionKeyDown}
+                  maxLength={1200}
+                  rows={2}
+                  placeholder={t.question}
+                  disabled={busy}
+                />
+                <div className="composer-footer">
+                  <span>{question.length}/1200 · {t.composerHint}</span>
+                  <button type="submit" className="primary-button" disabled={busy || !question.trim() || !subject}>
+                    {busy ? t.loading : t.send}<span aria-hidden="true">↑</span>
+                  </button>
+                </div>
+              </form>
+            </div>
+          </section>
+        )}
+
+        {page === "coloring" && (
+          <section className="content coloring-content" aria-label={t.coloringNav}>
+            <ColoringActivity
+              locale={locale}
+              grade={grade}
+              medium={bookMedium}
+              subject={subject}
             />
-          </div>
-          <div className="coloring-actions">
-            <button className="secondary-button" onClick={undoLastColor}>{labels.undo}</button>
-            <button className="secondary-button" onClick={resetPage}>{labels.reset}</button>
-            {selected && !blankPage && <button
-              className="primary-button"
-              onClick={() => setShowReference((current) => !current)}
-            >
-              {showReference ? labels.hide : labels.reveal}
-            </button>}
-          </div>
-        </>
-      )}
-      {!loading && !selected && !blankPage && activities.length > 0 && (
-        <p className="coloring-empty">{labels.noSelection}</p>
-      )}
-      {feedback && <p className="coloring-feedback" role="status">{feedback}</p>}
-      {error && <p className="request-error" role="alert">{error}</p>}
-    </section>
+          </section>
+        )}
+
+        {page === "practice" && (
+          <TextbookQuiz
+            locale={locale}
+            token={authToken}
+            student={selectedStudent}
+            subject={subject}
+            medium={bookMedium}
+            onOpenFamily={() => setPage("family")}
+            onProgressChanged={() => setProgressRefresh((current) => current + 1)}
+          />
+        )}
+
+        {page === "progress" && (
+          <FamilyDashboard
+            locale={locale}
+            user={familyUser}
+            token={authToken}
+            progressRefresh={progressRefresh}
+            onSession={handleSession}
+            onStudentSelected={handleStudentSelected}
+          />
+        )}
+
+        {page === "family" && (
+          <FamilyDashboard
+            locale={locale}
+            user={familyUser}
+            token={authToken}
+            progressRefresh={progressRefresh}
+            onSession={handleSession}
+            onStudentSelected={handleStudentSelected}
+          />
+        )}
+      </main>
+    </div>
   );
 }
+
+export default App;
+
